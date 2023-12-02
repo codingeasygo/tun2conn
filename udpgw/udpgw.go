@@ -302,10 +302,9 @@ func (u *Gateway) limitConn() {
 	}
 }
 
-type PairAddr interface {
+type ConnID interface {
 	net.Addr
 	LocalAddr() net.Addr
-	RemoteAddr() net.Addr
 }
 
 type Conn struct {
@@ -313,7 +312,7 @@ type Conn struct {
 	raw      net.PacketConn
 	ipv6     bool
 	sequence uint16
-	idAll    map[uint16]PairAddr
+	idAll    map[uint16]ConnID
 	idLast   map[uint16]time.Time
 	lock     sync.RWMutex
 }
@@ -323,7 +322,7 @@ func NewConn(raw net.PacketConn, ipv6 bool) (conn *Conn) {
 		MaxAlive: time.Minute,
 		raw:      raw,
 		ipv6:     ipv6,
-		idAll:    map[uint16]PairAddr{},
+		idAll:    map[uint16]ConnID{},
 		idLast:   map[uint16]time.Time{},
 		lock:     sync.RWMutex{},
 	}
@@ -350,7 +349,7 @@ func (c *Conn) Read(p []byte) (n int, err error) {
 	if err != nil {
 		return
 	}
-	fromAddr := from.(PairAddr)
+	fromAddr := from.(ConnID)
 	localAddr := fromAddr.LocalAddr().(*net.UDPAddr)
 	c.lock.Lock()
 	defer c.lock.Unlock()
