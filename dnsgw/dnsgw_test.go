@@ -1,15 +1,17 @@
 package dnsproxy
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/codingeasygo/util/xnet"
+	"github.com/codingeasygo/util/xio"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
@@ -142,14 +144,68 @@ func (e *ErrRWC) Close() (err error) {
 	return
 }
 
-func TestServer(t *testing.T) {
+func TestNetDialer(t *testing.T) {
+	udpServer, _ := net.ListenUDP("udp", nil)
+	go func() {
+		buffer := make([]byte, 1024)
+		for {
+			n, from, err := udpServer.ReadFrom(buffer)
+			if err != nil {
+				break
+			}
+			udpServer.WriteTo(buffer[:n], from)
+		}
+	}()
+	dialer := NewNetDialer()
+	_, err := dialer.DialQuerier(context.Background(), "udp://xxx:xx")
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	querier, err := dialer.DialQuerier(context.Background(), fmt.Sprintf("udp://127.0.0.1:%v", udpServer.LocalAddr().(*net.UDPAddr).Port))
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	_, err = querier.Query(ctx, []byte("abc"))
+	cancel()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	querier.Close()
+	_, err = querier.Query(context.Background(), []byte("abc"))
+	if err == nil {
+		t.Error(err)
+		return
+	}
+}
+
+func TestPiperDialer(t *testing.T) {
+	dialer := NewPiperDialer(xio.PiperDialerF(xio.DialNetPiper), 1024)
+	querier, err := dialer.DialQuerier(context.Background(), "udp://192.168.1.1:53")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	querier.Close()
+
+	pc := &piperConn{
+		waiter: sync.WaitGroup{},
+	}
+	pc.waiter.Add(1)
+	pc.pipeConn()
+}
+
+func TestForwarder(t *testing.T) {
 	defer os.Remove("cache.json")
-	server := NewServer()
-	server.UpperAddr["*"] = []string{"udp://192.168.1.1:53"}
-	server.MaxConn = 1
-	server.Policy = func(request []byte) string { return "*" }
-	server.Listen = ":10253"
-	server.Cache = NewCache()
+	forwarder := NewForwarder()
+	forwarder.UpperAddr["*"] = []string{"udp://192.168.1.1:53"}
+	forwarder.MaxConn = 1
+	forwarder.Policy = func(request []byte) string { return "*" }
+	forwarder.Listen = ":10253"
+	forwarder.Cache = NewCache()
 	msg := dnsmessage.Message{
 		Questions: []dnsmessage.Question{
 			{
@@ -161,12 +217,12 @@ func TestServer(t *testing.T) {
 	}
 	pack, _ := msg.Pack()
 
-	_, err := server.Query(pack)
+	_, err := forwarder.Query(pack)
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	response, err := server.Query(pack)
+	response, err := forwarder.Query(pack)
 	if err != nil {
 		t.Error(err)
 		return
@@ -174,7 +230,7 @@ func TestServer(t *testing.T) {
 	fmt.Printf("--->%v\n", response)
 
 	//listen
-	err = server.Start()
+	err = forwarder.Start()
 	if err != nil {
 		t.Error(err)
 		return
@@ -189,15 +245,15 @@ func TestServer(t *testing.T) {
 	conn.Read(buffer)
 	conn.Close()
 
-	server.Stop()
+	forwarder.Stop()
 
 	//acquire
-	conn1, err := server.AcquireConn("*")
+	conn1, err := forwarder.AcquireConn("*")
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	_, err = server.AcquireConn("*")
+	_, err = forwarder.AcquireConn("*")
 	if err == nil {
 		t.Error(err)
 		return
@@ -206,68 +262,68 @@ func TestServer(t *testing.T) {
 	conn1.Close()
 
 	//dialer error
-	server = NewServer()
-	server.Dialer = xnet.NewRawDialerWrapper(xnet.RawDialerF(func(network, address string) (net.Conn, error) {
+	forwarder = NewForwarder()
+	forwarder.Dialer = DialerF(func(ctx context.Context, addr string) (querier Querier, err error) {
 		return nil, fmt.Errorf("error")
-	}))
-	_, err = server.Query(pack)
+	})
+	_, err = forwarder.Query(pack)
 	if err == nil {
 		t.Error(err)
 		return
 	}
 
-	//connect error
-	errConn := &ErrRWC{}
-	conn2 := server.NewConn("test", errConn)
+	// //connect error
+	// errConn := &ErrRWC{}
+	// conn2 := forwarder.NewConn("test", errConn)
 
-	errConn.ReadErr = fmt.Errorf("error")
-	_, _, err = conn2.Query(pack)
-	if err == nil {
-		t.Error(err)
-		return
-	}
-	errConn.WriteErr = fmt.Errorf("error")
-	_, _, err = conn2.Query(pack)
-	if err == nil {
-		t.Error(err)
-		return
-	}
+	// errConn.ReadErr = fmt.Errorf("error")
+	// _, _, err = conn2.Query(pack)
+	// if err == nil {
+	// 	t.Error(err)
+	// 	return
+	// }
+	// errConn.WriteErr = fmt.Errorf("error")
+	// _, _, err = conn2.Query(pack)
+	// if err == nil {
+	// 	t.Error(err)
+	// 	return
+	// }
 
 	//listen error
-	server = NewServer()
-	server.Listen = ":xxs"
-	err = server.Start()
+	forwarder = NewForwarder()
+	forwarder.Listen = ":xxs"
+	err = forwarder.Start()
 	if err == nil {
 		t.Error(err)
 		return
 	}
-	server.Listen = ":10253"
-	err = server.Start()
+	forwarder.Listen = ":10253"
+	err = forwarder.Start()
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	err = server.Start()
+	err = forwarder.Start()
 	if err == nil {
 		t.Error(err)
 		return
 	}
-	server.Stop()
+	forwarder.Stop()
 
 	//task error
-	server = NewServer()
-	server.UpperAddr["*"] = []string{"udp://192.168.1.1:53"}
+	forwarder = NewForwarder()
+	forwarder.UpperAddr["*"] = []string{"udp://192.168.1.1:53"}
 
-	server.procTask(&requestTask{Request: pack})
+	forwarder.procTask(&requestTask{Request: pack})
 
-	server = NewServer()
-	server.UpperAddr["*"] = []string{"udp://192.168.1.1:53"}
-	server.Dialer = xnet.NewRawDialerWrapper(xnet.RawDialerF(func(network, address string) (net.Conn, error) {
+	forwarder = NewForwarder()
+	forwarder.UpperAddr["*"] = []string{"udp://192.168.1.1:53"}
+	forwarder.Dialer = DialerF(func(ctx context.Context, addr string) (querier Querier, err error) {
 		return nil, fmt.Errorf("error")
-	}))
-	server.procTask(&requestTask{})
+	})
+	forwarder.procTask(&requestTask{})
 
-	server.taskQueue = make(chan *requestTask, 1)
-	server.taskQueue <- nil
-	server.addTask(nil, nil, nil)
+	forwarder.taskQueue = make(chan *requestTask, 1)
+	forwarder.taskQueue <- nil
+	forwarder.addTask(nil, nil, nil)
 }

@@ -1,17 +1,18 @@
 package dnsproxy
 
 import (
+	"context"
 	"fmt"
-	"io"
 	"net"
+	"net/url"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/codingeasygo/tun2conn/log"
 	"github.com/codingeasygo/util/xdebug"
+	"github.com/codingeasygo/util/xio"
 	"github.com/codingeasygo/util/xjson"
-	"github.com/codingeasygo/util/xnet"
 	"github.com/codingeasygo/util/xtime"
 	"golang.org/x/net/dns/dnsmessage"
 )
@@ -164,38 +165,130 @@ func (c *Cache) Stop() {
 	c.waiter.Wait()
 }
 
-type Conn struct {
-	addr   string
-	raw    io.ReadWriteCloser
-	using  bool
-	server *Server
-	buffer []byte
-	err    error
+type Querier interface {
+	Query(ctx context.Context, request []byte) (response []byte, err error)
+	Close() (err error)
 }
 
-func (c *Conn) Query(request []byte) (response []byte, retry bool, err error) {
-	_, err = c.raw.Write(request)
-	if err != nil {
-		c.err = err
-		retry = true
-		return
-	}
+type Dialer interface {
+	DialQuerier(ctx context.Context, addr string) (querier Querier, err error)
+}
 
-	n, err := c.raw.Read(c.buffer)
+type DialerF func(ctx context.Context, addr string) (querier Querier, err error)
+
+func (d DialerF) DialQuerier(ctx context.Context, addr string) (querier Querier, err error) {
+	return d(ctx, addr)
+}
+
+type netConn struct {
+	net.Conn
+}
+
+func (n *netConn) Query(ctx context.Context, request []byte) (response []byte, err error) {
+	dealine, ok := ctx.Deadline()
+	if ok {
+		n.Conn.SetDeadline(dealine)
+	}
+	_, err = n.Conn.Write(request)
 	if err != nil {
-		c.err = err
-		retry = true
 		return
 	}
-	response = make([]byte, n)
-	copy(response, c.buffer[:n])
+	buffer := make([]byte, 2048)
+	readed, err := n.Conn.Read(buffer)
+	if err == nil {
+		response = buffer[:readed]
+	}
 	return
+}
+
+type NetDialer net.Dialer
+
+func NewNetDialer() (dialer *NetDialer) {
+	dialer = &NetDialer{}
+	return
+}
+
+func (n *NetDialer) DialQuerier(ctx context.Context, addr string) (querier Querier, err error) {
+	addrURI, err := url.Parse(addr)
+	if err != nil {
+		return
+	}
+	raw, err := (*net.Dialer)(n).DialContext(ctx, addrURI.Scheme, addrURI.Host)
+	if err == nil {
+		querier = &netConn{Conn: raw}
+	}
+	return
+}
+
+type piperConn struct {
+	*xio.QueryConn
+	addr   string
+	piper  xio.Piper
+	waiter sync.WaitGroup
+}
+
+func newPiperConn(addr string, piper xio.Piper) (conn *piperConn) {
+	conn = &piperConn{
+		QueryConn: xio.NewQueryConn(),
+		addr:      addr,
+		piper:     piper,
+		waiter:    sync.WaitGroup{},
+	}
+	conn.waiter.Add(1)
+	go conn.pipeConn()
+	return
+}
+
+func (p *piperConn) pipeConn() {
+	defer func() {
+		if perr := recover(); perr != nil {
+			log.ErrorLog("PiperDialer pipe conn is panic with %v, callstack is \n%v", perr, xdebug.CallStack())
+		}
+		p.waiter.Done()
+	}()
+	p.piper.PipeConn(p.QueryConn, p.addr)
+}
+
+func (p *piperConn) Close() (err error) {
+	p.QueryConn.Close()
+	p.waiter.Wait()
+	return
+}
+
+type PiperDialer struct {
+	xio.PiperDialer
+	BufferSize int
+}
+
+func NewPiperDialer(base xio.PiperDialer, bufferSize int) (dialer *PiperDialer) {
+	dialer = &PiperDialer{
+		PiperDialer: base,
+		BufferSize:  bufferSize,
+	}
+	return
+}
+
+func (p *PiperDialer) DialQuerier(ctx context.Context, addr string) (querier Querier, err error) {
+	raw, err := p.PiperDialer.DialPiper(addr, p.BufferSize)
+	if err == nil {
+		querier = newPiperConn(addr, raw)
+	}
+	return
+}
+
+type Conn struct {
+	Querier
+	addr      string
+	using     bool
+	forwarder *Forwarder
+	buffer    []byte
+	err       error
 }
 
 func (c *Conn) Close() (err error) {
 	if c.err != nil {
-		c.server.RemoveConn(c)
-		err = c.raw.Close()
+		c.forwarder.RemoveConn(c)
+		err = c.Querier.Close()
 	}
 	c.using = false
 	return
@@ -207,15 +300,16 @@ type requestTask struct {
 	Request []byte
 }
 
-type Server struct {
+type Forwarder struct {
 	UpperAddr  map[string][]string
 	MaxConn    int
 	MaxTry     int
 	Concurrent int
 	Listen     string
-	Dialer     xnet.Dialer
+	Dialer     Dialer
 	Cache      *Cache
 	Policy     func(request []byte) string
+	BufferSize int
 	connAll    map[string]map[string]map[string]*Conn
 	connLock   sync.RWMutex
 	taskQueue  chan *requestTask
@@ -224,15 +318,16 @@ type Server struct {
 	waiter     sync.WaitGroup
 }
 
-func NewServer() (server *Server) {
-	server = &Server{
+func NewForwarder() (forwarder *Forwarder) {
+	forwarder = &Forwarder{
 		UpperAddr: map[string][]string{
 			"*": {"udp://8.8.4.4:53"},
 		},
 		MaxConn:    10,
 		MaxTry:     3,
 		Concurrent: 3,
-		Dialer:     xnet.NewNetDailer(),
+		Dialer:     NewNetDialer(),
+		BufferSize: 2048,
 		connAll:    map[string]map[string]map[string]*Conn{},
 		connLock:   sync.RWMutex{},
 		taskQueue:  make(chan *requestTask, 32),
@@ -242,15 +337,15 @@ func NewServer() (server *Server) {
 	return
 }
 
-func (s *Server) AcquireConn(key string) (conn *Conn, err error) {
-	s.connLock.Lock()
-	defer s.connLock.Unlock()
-	keyAll := s.connAll[key]
+func (f *Forwarder) AcquireConn(key string) (conn *Conn, err error) {
+	f.connLock.Lock()
+	defer f.connLock.Unlock()
+	keyAll := f.connAll[key]
 	if keyAll == nil {
 		keyAll = map[string]map[string]*Conn{}
-		s.connAll[key] = keyAll
+		f.connAll[key] = keyAll
 	}
-	for _, addr := range s.UpperAddr[key] {
+	for _, addr := range f.UpperAddr[key] {
 		connAll := keyAll[addr]
 		if connAll == nil {
 			connAll = map[string]*Conn{}
@@ -270,17 +365,19 @@ func (s *Server) AcquireConn(key string) (conn *Conn, err error) {
 	if conn != nil {
 		return
 	}
-	for _, addr := range s.UpperAddr[key] {
+	for _, addr := range f.UpperAddr[key] {
 		connAll := keyAll[addr]
-		if len(connAll) >= s.MaxConn {
+		if len(connAll) >= f.MaxConn {
 			continue
 		}
-		raw, xerr := s.Dialer.Dial(addr)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		raw, xerr := f.Dialer.DialQuerier(ctx, addr)
+		cancel()
 		if xerr != nil {
 			log.WarnLog("Server dial connect by %v error %v", addr, xerr)
 			continue
 		}
-		conn = s.NewConn(addr, raw)
+		conn = f.NewConn(addr, raw)
 		connAll[fmt.Sprintf("%p", conn)] = conn
 		break
 	}
@@ -290,54 +387,71 @@ func (s *Server) AcquireConn(key string) (conn *Conn, err error) {
 	return
 }
 
-func (s *Server) RemoveConn(conn *Conn) {
-	s.connLock.Lock()
-	defer s.connLock.Unlock()
+func (f *Forwarder) RemoveConn(conn *Conn) {
+	f.connLock.Lock()
+	defer f.connLock.Unlock()
 	conn.using = false
-	delete(s.connAll[conn.addr], fmt.Sprintf("%p", conn))
+	delete(f.connAll[conn.addr], fmt.Sprintf("%p", conn))
 }
 
-func (s *Server) NewConn(addr string, raw io.ReadWriteCloser) (conn *Conn) {
+func (f *Forwarder) NewConn(addr string, raw Querier) (conn *Conn) {
 	conn = &Conn{
-		addr:   addr,
-		raw:    raw,
-		server: s,
-		buffer: make([]byte, 1500),
+		Querier:   raw,
+		addr:      addr,
+		forwarder: f,
+		buffer:    make([]byte, 2048),
 	}
 	return
 }
 
-func (s *Server) Query(request []byte) (response []byte, err error) {
-	retry := true
-	key := "*"
-	if s.Policy != nil {
-		key = s.Policy(request)
+func (f *Forwarder) closeAllConn() {
+	connAll := []*Conn{}
+	f.connLock.RLock()
+	for _, c1 := range f.connAll {
+		for _, c2 := range c1 {
+			for _, conn := range c2 {
+				connAll = append(connAll, conn)
+			}
+		}
 	}
-	for i := 0; retry && i < s.MaxTry; i++ {
-		conn, xerr := s.AcquireConn(key)
+	f.connLock.RUnlock()
+	for _, conn := range connAll {
+		conn.Close()
+	}
+}
+
+func (f *Forwarder) Query(request []byte) (response []byte, err error) {
+	key := "*"
+	if f.Policy != nil {
+		key = f.Policy(request)
+	}
+	for i := 0; i < f.MaxTry; i++ {
+		conn, xerr := f.AcquireConn(key)
 		if xerr != nil {
 			err = xerr
 			break
 		}
-		response, retry, err = conn.Query(request)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		response, err = conn.Query(ctx, request)
+		cancel()
 		conn.Close()
 		if err == nil {
 			break
 		}
 	}
-	if s.Cache != nil && err == nil && len(response) > 0 {
-		s.Cache.Add(response[:])
+	if f.Cache != nil && err == nil && len(response) > 0 {
+		f.Cache.Add(response[:])
 	}
 	return
 }
 
-func (s *Server) procTask(task *requestTask) {
+func (f *Forwarder) procTask(task *requestTask) {
 	defer func() {
 		if perr := recover(); perr != nil {
 			log.ErrorLog("Server proc task is panic with %v, callstack is \n%v", perr, xdebug.CallStack())
 		}
 	}()
-	response, err := s.Query(task.Request)
+	response, err := f.Query(task.Request)
 	if err != nil {
 		log.WarnLog("Server query error %v\n", err)
 		return
@@ -345,32 +459,32 @@ func (s *Server) procTask(task *requestTask) {
 	task.Conn.WriteTo(response, task.From)
 }
 
-func (s *Server) loopTask() {
-	defer s.waiter.Done()
+func (f *Forwarder) loopTask() {
+	defer f.waiter.Done()
 	running := true
 	for running {
 		select {
-		case <-s.exiter:
+		case <-f.exiter:
 			running = false
-		case task := <-s.taskQueue:
-			s.procTask(task)
+		case task := <-f.taskQueue:
+			f.procTask(task)
 		}
 	}
 }
 
-func (s *Server) addTask(conn net.PacketConn, from net.Addr, request []byte) {
+func (f *Forwarder) addTask(conn net.PacketConn, from net.Addr, request []byte) {
 	task := &requestTask{
 		Conn:    conn,
 		From:    from,
 		Request: request,
 	}
 	select {
-	case s.taskQueue <- task:
+	case f.taskQueue <- task:
 	default:
 	}
 }
 
-func (s *Server) ServeConn(conn net.PacketConn) (err error) {
+func (f *Forwarder) ServeConn(conn net.PacketConn) (err error) {
 	for {
 		buffer := make([]byte, 1500)
 		n, from, xerr := conn.ReadFrom(buffer)
@@ -378,20 +492,20 @@ func (s *Server) ServeConn(conn net.PacketConn) (err error) {
 			err = xerr
 			break
 		}
-		s.addTask(conn, from, buffer[:n])
+		f.addTask(conn, from, buffer[:n])
 	}
 	return
 }
 
-func (s *Server) procListen(conn net.PacketConn) {
-	defer s.waiter.Done()
-	err := s.ServeConn(conn)
+func (f *Forwarder) procListen(conn net.PacketConn) {
+	defer f.waiter.Done()
+	err := f.ServeConn(conn)
 	log.InfoLog("Server listener on %v is stopped by %v", conn.LocalAddr(), err)
 }
 
-func (s *Server) Start() (err error) {
-	if len(s.Listen) > 0 {
-		addr, xerr := net.ResolveUDPAddr("udp", s.Listen)
+func (f *Forwarder) Start() (err error) {
+	if len(f.Listen) > 0 {
+		addr, xerr := net.ResolveUDPAddr("udp", f.Listen)
 		if xerr != nil {
 			err = xerr
 			return
@@ -401,28 +515,29 @@ func (s *Server) Start() (err error) {
 			err = xerr
 			return
 		}
-		s.listener = ln
-		s.waiter.Add(1)
-		go s.procListen(s.listener)
+		f.listener = ln
+		f.waiter.Add(1)
+		go f.procListen(f.listener)
 	}
-	for i := 0; i < s.Concurrent; i++ {
-		s.waiter.Add(1)
-		go s.loopTask()
+	for i := 0; i < f.Concurrent; i++ {
+		f.waiter.Add(1)
+		go f.loopTask()
 	}
 	return
 }
 
-func (s *Server) Stop() (err error) {
-	if len(s.Listen) > 0 {
-		s.exiter <- 1
-		if s.listener != nil {
-			s.listener.Close()
-			s.listener = nil
+func (f *Forwarder) Stop() (err error) {
+	f.closeAllConn()
+	if len(f.Listen) > 0 {
+		f.exiter <- 1
+		if f.listener != nil {
+			f.listener.Close()
+			f.listener = nil
 		}
 	}
-	for i := 0; i < s.Concurrent; i++ {
-		s.exiter <- 1
+	for i := 0; i < f.Concurrent; i++ {
+		f.exiter <- 1
 	}
-	s.waiter.Wait()
+	f.waiter.Wait()
 	return
 }
