@@ -1,4 +1,4 @@
-package dnsproxy
+package dnsgw
 
 import (
 	"context"
@@ -220,15 +220,15 @@ func (n *NetDialer) DialQuerier(ctx context.Context, addr string) (querier Queri
 	return
 }
 
-type piperConn struct {
+type PiperConn struct {
 	*xio.QueryConn
 	addr   string
 	piper  xio.Piper
 	waiter sync.WaitGroup
 }
 
-func newPiperConn(addr string, piper xio.Piper) (conn *piperConn) {
-	conn = &piperConn{
+func NewPiperConn(addr string, piper xio.Piper) (conn *PiperConn) {
+	conn = &PiperConn{
 		QueryConn: xio.NewQueryConn(),
 		addr:      addr,
 		piper:     piper,
@@ -239,7 +239,7 @@ func newPiperConn(addr string, piper xio.Piper) (conn *piperConn) {
 	return
 }
 
-func (p *piperConn) pipeConn() {
+func (p *PiperConn) pipeConn() {
 	defer func() {
 		if perr := recover(); perr != nil {
 			log.ErrorLog("PiperDialer pipe conn is panic with %v, callstack is \n%v", perr, xdebug.CallStack())
@@ -249,7 +249,7 @@ func (p *piperConn) pipeConn() {
 	p.piper.PipeConn(p.QueryConn, p.addr)
 }
 
-func (p *piperConn) Close() (err error) {
+func (p *PiperConn) Close() (err error) {
 	p.QueryConn.Close()
 	p.waiter.Wait()
 	return
@@ -271,7 +271,7 @@ func NewPiperDialer(base xio.PiperDialer, bufferSize int) (dialer *PiperDialer) 
 func (p *PiperDialer) DialQuerier(ctx context.Context, addr string) (querier Querier, err error) {
 	raw, err := p.PiperDialer.DialPiper(addr, p.BufferSize)
 	if err == nil {
-		querier = newPiperConn(addr, raw)
+		querier = NewPiperConn(addr, raw)
 	}
 	return
 }
@@ -490,6 +490,7 @@ func (f *Forwarder) ServeConn(conn net.PacketConn) (err error) {
 		n, from, xerr := conn.ReadFrom(buffer)
 		if xerr != nil {
 			err = xerr
+			log.InfoLog("Forwarder(%v) read is done by %v", conn, err)
 			break
 		}
 		f.addTask(conn, from, buffer[:n])

@@ -1,4 +1,4 @@
-package tun2conn
+package udpgw
 
 import (
 	"bytes"
@@ -141,7 +141,7 @@ func TestGateway(t *testing.T) {
 
 type testPacketConn struct {
 	net.PacketConn
-	LAddr net.Addr
+	LAddr *net.UDPAddr
 	RAddr net.Addr
 	Send  chan []byte
 	Recv  chan []byte
@@ -172,6 +172,14 @@ func (t *testPacketConn) String() string {
 
 func (t *testPacketConn) LocalAddr() net.Addr {
 	return t.LAddr
+}
+
+func (t *testPacketConn) LocalIP() net.IP {
+	return t.LAddr.IP
+}
+
+func (t *testPacketConn) LocalPort() uint16 {
+	return uint16(t.LAddr.Port)
 }
 
 func (t *testPacketConn) RemoteAddr() net.Addr {
@@ -242,7 +250,7 @@ func TestConn(t *testing.T) {
 		fmt.Printf("lv6 start on %v\n", lv6.LocalAddr())
 		gw := NewGateway()
 		pc := newTestPacketConn()
-		pc.LAddr = lv6.LocalAddr()
+		pc.LAddr = lv6.LocalAddr().(*net.UDPAddr)
 		pc.RAddr = lv6.LocalAddr()
 		conn := NewConn(pc, true)
 		rwc := frame.NewRawReadWriteCloser(frame.NewDefaultHeader(), conn, 1024)
@@ -266,8 +274,8 @@ func TestConn(t *testing.T) {
 	{
 		pc := newTestPacketConn()
 		conn := NewConn(pc, true)
-		conn.idAll[1] = pc
-		conn.idLast[1] = time.Now().Add(-time.Hour)
+		conn.addrAll[1] = pc
+		conn.addrLast[1] = time.Now().Add(-time.Hour)
 		conn.clearTimeoutLocked()
 	}
 }
@@ -299,13 +307,13 @@ func TestForwarder(t *testing.T) {
 	pc.RAddr = lv4.LocalAddr()
 	conn := NewConn(pc, false)
 
-	forwarder := NewForwarder(conn)
-	forwarder.Policy = func(i net.IP, p uint16) string { return "*" }
-	forwarder.Dialer["*"] = xio.PiperDialerF(func(uri string, bufferSize int) (raw xio.Piper, err error) {
+	dialer := xio.PiperDialerF(func(uri string, bufferSize int) (raw xio.Piper, err error) {
 		raw = &forwardPiper{Piper: NewGateway()}
 		return
 	})
-	forwarder.Start()
+	forwarder := NewForwarder(dialer, 2048)
+	forwarder.Policy = func(i net.IP, p uint16) string { return "*" }
+	go forwarder.ServeConn(conn)
 
 	pc.Send <- []byte("abc")
 	time.Sleep(time.Second)
@@ -316,20 +324,26 @@ func TestForwarder(t *testing.T) {
 	}
 	pc.Send <- nil
 
-	forwarder.Stop()
+	conn.Close()
 	<-pc.Done
 
 	//test error
-	forwarder.procData(nil)
+	forwarder.procData(nil, nil)
 
-	forwarder.procData([]byte{CLIENT_FLAG_IPV6, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+	forwarder.procData(conn, []byte{CLIENT_FLAG_IPV6, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
 
 	forwarder.Policy = func(i net.IP, p uint16) string { return "none" }
-	forwarder.procData([]byte{CLIENT_FLAG_IPV6, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+	forwarder.procData(conn, []byte{CLIENT_FLAG_IPV6, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
 
-	forwarder.Dialer["error"] = xio.PiperDialerF(func(uri string, bufferSize int) (raw xio.Piper, err error) {
+	dialer = xio.PiperDialerF(func(uri string, bufferSize int) (raw xio.Piper, err error) {
 		return nil, fmt.Errorf("test error")
 	})
+	forwarder = NewForwarder(dialer, 2048)
 	forwarder.Policy = func(i net.IP, p uint16) string { return "error" }
-	forwarder.procData([]byte{CLIENT_FLAG_IPV6, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+	forwarder.procData(conn, []byte{CLIENT_FLAG_IPV6, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+
+	//cover
+	fc := &forwarderConn{}
+	fc.send([]byte("abc"))
+	fc.send([]byte("abc"))
 }

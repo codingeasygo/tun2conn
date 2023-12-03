@@ -1,4 +1,4 @@
-package tun2conn
+package udpgw
 
 import (
 	"encoding/binary"
@@ -214,6 +214,7 @@ func (u *Gateway) procData(piped frame.ReadWriteCloser, p []byte) (n int, err er
 		addrPort = binary.BigEndian.Uint16(p[7:9])
 		data = p[9:]
 	}
+	fmt.Println("abc---->", addrIP, addrPort)
 	u.connLock.RLock()
 	conn := u.connList[conid]
 	u.connLock.RUnlock()
@@ -302,9 +303,10 @@ func (u *Gateway) limitConn() {
 	}
 }
 
-type ConnID interface {
+type LocalAddr interface {
 	net.Addr
-	LocalAddr() net.Addr
+	LocalIP() net.IP
+	LocalPort() uint16
 }
 
 type Conn struct {
@@ -312,8 +314,8 @@ type Conn struct {
 	raw      net.PacketConn
 	ipv6     bool
 	sequence uint16
-	idAll    map[uint16]ConnID
-	idLast   map[uint16]time.Time
+	addrAll  map[uint16]LocalAddr
+	addrLast map[uint16]time.Time
 	lock     sync.RWMutex
 }
 
@@ -322,8 +324,8 @@ func NewConn(raw net.PacketConn, ipv6 bool) (conn *Conn) {
 		MaxAlive: time.Minute,
 		raw:      raw,
 		ipv6:     ipv6,
-		idAll:    map[uint16]ConnID{},
-		idLast:   map[uint16]time.Time{},
+		addrAll:  map[uint16]LocalAddr{},
+		addrLast: map[uint16]time.Time{},
 		lock:     sync.RWMutex{},
 	}
 	return
@@ -331,10 +333,10 @@ func NewConn(raw net.PacketConn, ipv6 bool) (conn *Conn) {
 
 func (c *Conn) clearTimeoutLocked() {
 	now := time.Now()
-	for id, last := range c.idLast {
+	for id, last := range c.addrLast {
 		if now.Sub(last) > c.MaxAlive {
-			delete(c.idAll, id)
-			delete(c.idLast, id)
+			delete(c.addrAll, id)
+			delete(c.addrLast, id)
 		}
 	}
 }
@@ -349,8 +351,7 @@ func (c *Conn) Read(p []byte) (n int, err error) {
 	if err != nil {
 		return
 	}
-	fromAddr := from.(ConnID)
-	localAddr := fromAddr.LocalAddr().(*net.UDPAddr)
+	fromAddr := from.(LocalAddr)
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	c.clearTimeoutLocked()
@@ -358,14 +359,14 @@ func (c *Conn) Read(p []byte) (n int, err error) {
 	id := c.sequence
 	binary.BigEndian.PutUint16(p[1:], id)
 	if c.ipv6 {
-		copy(p[3:19], localAddr.IP)
-		binary.BigEndian.PutUint16(p[19:21], uint16(localAddr.Port))
+		copy(p[3:19], fromAddr.LocalIP().To16())
+		binary.BigEndian.PutUint16(p[19:21], fromAddr.LocalPort())
 	} else {
-		copy(p[3:7], localAddr.IP)
-		binary.BigEndian.PutUint16(p[7:9], uint16(localAddr.Port))
+		copy(p[3:7], fromAddr.LocalIP().To4())
+		binary.BigEndian.PutUint16(p[7:9], fromAddr.LocalPort())
 	}
-	c.idAll[id] = fromAddr
-	c.idLast[id] = time.Now()
+	c.addrAll[id] = fromAddr
+	c.addrLast[id] = time.Now()
 	n += dataOffset
 	return
 }
@@ -388,7 +389,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 		data = p[9:]
 	}
 	c.lock.RLock()
-	fromAddr := c.idAll[conid]
+	fromAddr := c.addrAll[conid]
 	c.lock.RUnlock()
 	if fromAddr == nil { //ignore
 		n = len(p)
@@ -451,20 +452,18 @@ func (c *forwarderConn) Close() (err error) {
 }
 
 type Forwarder struct {
-	BufferSize int
 	Policy     func(net.IP, uint16) string
-	Dialer     map[string]xio.PiperDialer
-	conn       *Conn
+	dialer     xio.PiperDialer
+	bufferSize int
 	nextAll    map[string]*forwarderConn
 	nextLock   sync.RWMutex
 	waiter     sync.WaitGroup
 }
 
-func NewForwarder(conn *Conn) (forwarder *Forwarder) {
+func NewForwarder(dialer xio.PiperDialer, bufferSize int) (forwarder *Forwarder) {
 	forwarder = &Forwarder{
-		BufferSize: 2048,
-		Dialer:     map[string]xio.PiperDialer{},
-		conn:       conn,
+		dialer:     dialer,
+		bufferSize: bufferSize,
 		nextAll:    map[string]*forwarderConn{},
 		nextLock:   sync.RWMutex{},
 		waiter:     sync.WaitGroup{},
@@ -472,37 +471,27 @@ func NewForwarder(conn *Conn) (forwarder *Forwarder) {
 	return
 }
 
-func (f *Forwarder) Start() {
-	f.waiter.Add(1)
-	go f.loopRead()
-}
-
-func (f *Forwarder) Stop() {
-	f.conn.Close()
-	f.waiter.Wait()
-}
-
-func (f *Forwarder) loopRead() {
-	defer f.waiter.Done()
-	buffer := make([]byte, f.BufferSize)
+func (f *Forwarder) ServeConn(conn *Conn) {
+	buffer := make([]byte, f.bufferSize)
 	for {
-		n, err := f.conn.Read(buffer)
+		n, err := conn.Read(buffer)
 		if err != nil {
-			log.InfoLog("Forwarder(%v) read is done by %v", f.conn, err)
+			log.InfoLog("Forwarder(%v) read is done by %v", conn, err)
 			break
 		}
-		f.procData(buffer[:n])
+		f.procData(conn, buffer[:n])
 	}
 	for _, next := range f.nextAll {
 		next.Close()
 	}
 	f.nextAll = map[string]*forwarderConn{}
+	f.waiter.Wait()
 }
 
-func (f *Forwarder) procData(buffer []byte) {
+func (f *Forwarder) procData(conn *Conn, buffer []byte) {
 	defer func() {
 		if perr := recover(); perr != nil {
-			log.ErrorLog("Forward(%v) proc data is panic with %v, callstack is \n%v", f.conn, perr, xdebug.CallStack())
+			log.ErrorLog("Forward(%v) proc data is panic with %v, callstack is \n%v", conn, perr, xdebug.CallStack())
 		}
 	}()
 	key := "*"
@@ -523,17 +512,12 @@ func (f *Forwarder) procData(buffer []byte) {
 	next := f.nextAll[key]
 	f.nextLock.RUnlock()
 	if next == nil {
-		dialer := f.Dialer[key]
-		if dialer == nil {
-			log.WarnLog("Forwarder(%v) %v dialer is not supported", f.conn, key)
-			return
-		}
-		piper, err := dialer.DialPiper(key, f.BufferSize)
+		piper, err := f.dialer.DialPiper(key, f.bufferSize)
 		if err != nil {
-			log.WarnLog("Forwarder(%v) %v dialer dial piper by %v fail with %v", f.conn, key, key, err)
+			log.WarnLog("Forwarder(%v) %v dialer dial piper by %v fail with %v", conn, key, key, err)
 			return
 		}
-		next = newForwarderConn(f.conn)
+		next = newForwarderConn(conn)
 		f.nextLock.Lock()
 		f.nextAll[key] = next
 		f.nextLock.Unlock()

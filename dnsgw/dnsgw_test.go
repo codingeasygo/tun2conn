@@ -1,4 +1,4 @@
-package dnsproxy
+package dnsgw
 
 import (
 	"context"
@@ -191,7 +191,7 @@ func TestPiperDialer(t *testing.T) {
 	}
 	querier.Close()
 
-	pc := &piperConn{
+	pc := &PiperConn{
 		waiter: sync.WaitGroup{},
 	}
 	pc.waiter.Add(1)
