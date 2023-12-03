@@ -214,7 +214,6 @@ func (u *Gateway) procData(piped frame.ReadWriteCloser, p []byte) (n int, err er
 		addrPort = binary.BigEndian.Uint16(p[7:9])
 		data = p[9:]
 	}
-	fmt.Println("abc---->", addrIP, addrPort)
 	u.connLock.RLock()
 	conn := u.connList[conid]
 	u.connLock.RUnlock()
