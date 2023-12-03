@@ -10,6 +10,10 @@
             "request": "launch",
             "mode": "auto",
             "program": "${fileDirname}",
+            "args": [
+                "-socks",
+                "10.211.55.2:1235"
+            ],
             "asRoot": true,
             "console": "integratedTerminal",
         }
