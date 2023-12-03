@@ -9,6 +9,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,23 @@ func init() {
 	go http.ListenAndServe(":6063", nil)
 }
 
+func runConfig(name, netAddr, gwAddr string) (err error) {
+	args := []string{}
+	switch runtime.GOOS {
+	case "darwin":
+		setupScript := fmt.Sprintf(`ifconfig %v %v/24 %v up && route add -net %v/24 -interface %v`, name, netAddr, gwAddr, netAddr, name)
+		args = append(args, "bash", "-c", setupScript)
+	case "linux":
+		setupScript := fmt.Sprintf(`ip addr add %v/24 dev %v && ip link set dev %v up`, netAddr, name, name)
+		args = append(args, "bash", "-c", setupScript)
+	}
+	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err = cmd.Run()
+	return
+}
+
 func TestGateway(t *testing.T) {
 	// maddr, _ := net.ParseMAC("aa:00:01:01:01:01")
 	device, err := water.New(water.Config{
@@ -34,12 +52,7 @@ func TestGateway(t *testing.T) {
 		t.Error(err)
 		return
 	}
-	setupScript := fmt.Sprintf(`ifconfig %v 10.1.1.2/24 10.1.1.1 up && route add -net 10.1.1.2/24 -interface %v`, device.Name(), device.Name())
-	cmd := exec.Command("bash", "-c", setupScript)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	err = cmd.Run()
+	err = runConfig(device.Name(), "10.1.1.2", "10.1.1.1")
 	if err != nil {
 		t.Error(err)
 		return

@@ -308,7 +308,7 @@ func (g *Gateway) procUDP() {
 
 func (g *Gateway) policyUDP(ip net.IP, port uint16) (uri string) {
 	if g.Policy == nil {
-		return fmt.Sprintf("udp://%v:%v", ip, port)
+		return "tcp://udpgw"
 	}
 	domain, cname, _ := g.dnsCache.Reflect(ip.String())
 	key := ""
