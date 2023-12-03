@@ -17,6 +17,4 @@ require (
 	golang.org/x/time v0.3.0 // indirect
 )
 
-// replace gvisor.dev/gvisor v0.0.0-20231202080848-1f7806d17489 => github.com/codingeasygo/gvisor v0.0.0-20231202131929-2167d0e868f3
-
-replace gvisor.dev/gvisor => /Users/cny/work/gvisor
+replace gvisor.dev/gvisor v0.0.0-20231202080848-1f7806d17489 => github.com/codingeasygo/gvisor v0.0.0-20231202131929-2167d0e868f3
