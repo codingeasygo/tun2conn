@@ -33,7 +33,8 @@ type Gateway struct {
 	Addr       string
 	DNS        string
 	MTU        int
-	Policy     func(on string, domain string) string
+	Policy     func(on string, addr string, port uint16) string
+	Rewrite    func(on string, ip net.IP) net.IP
 	Dialer     xio.PiperDialer
 	BufferSize int
 	Stack      *stack.Stack
@@ -56,6 +57,7 @@ func NewGateway(device io.ReadWriteCloser, addr, dns string) (gateway *Gateway) 
 		Addr:       addr,
 		DNS:        dns,
 		MTU:        1500,
+		Rewrite:    func(on string, ip net.IP) net.IP { return ip },
 		Dialer:     xio.PiperDialerF(xio.DialNetPiper),
 		BufferSize: 2048,
 		device:     device,
@@ -265,15 +267,15 @@ func (g *Gateway) policyDNS(request []byte) (key string) {
 	parser := dnsmessage.Parser{}
 	_, err := parser.Start(request)
 	if err != nil {
-		key = g.Policy("dns", "")
+		key = g.Policy("dns", "", 0)
 		return
 	}
 	questions, _ := parser.AllQuestions()
 	if len(questions) < 1 {
-		key = g.Policy("dns", "")
+		key = g.Policy("dns", "", 0)
 		return
 	}
-	key = g.Policy("dns", questions[0].Name.String())
+	key = g.Policy("dns", questions[0].Name.String(), 0)
 	return
 }
 
@@ -297,6 +299,7 @@ func (g *Gateway) stopUDP() {
 
 func (g *Gateway) procUDP() {
 	conn := udpgw.NewConn(newGwConnPacketConn("udpgw", g, g.udpConn), g.proto == ipv6.ProtocolNumber)
+	conn.Rewrite = func(ip net.IP) net.IP { return g.Rewrite("udp", ip) }
 	defer func() {
 		conn.Close()
 		g.waiter.Done()
@@ -313,10 +316,10 @@ func (g *Gateway) policyUDP(ip net.IP, port uint16) (uri string) {
 	domain, cname, _ := g.dnsCache.Reflect(ip.String())
 	key := ""
 	if len(domain) > 0 {
-		key = g.Policy("udp", domain)
+		key = g.Policy("udp", domain, port)
 	}
 	if len(key) < 1 && len(cname) > 0 {
-		key = g.Policy("udp", cname)
+		key = g.Policy("udp", cname, port)
 	}
 	uri = fmt.Sprintf("tcp://udpgw/%v", key)
 	return
@@ -347,26 +350,26 @@ func (g *Gateway) procTCP() {
 	g.tcpGw.AcceptConn()
 }
 
-func (g *Gateway) policyTCP(addr *tcpip.FullAddress) (uri string) {
+func (g *Gateway) policyTCP(ip net.IP, port uint16) (uri string) {
 	if g.Policy == nil {
-		return fmt.Sprintf("tcp://%v:%v", addr.Addr, addr.Port)
+		return fmt.Sprintf("tcp://%v:%v", ip, port)
 	}
-	ip := addr.Addr.String()
-	domain, cname, _ := g.dnsCache.Reflect(ip)
+	domain, cname, _ := g.dnsCache.Reflect(ip.String())
 	if len(domain) > 0 {
-		uri = g.Policy("tcp", domain)
+		uri = g.Policy("tcp", domain, port)
 	}
 	if len(uri) < 1 && len(cname) > 0 {
-		uri = g.Policy("tcp", cname)
+		uri = g.Policy("tcp", cname, port)
 	}
 	if len(uri) < 1 {
-		uri = g.Policy("tcp", ip)
+		uri = g.Policy("tcp", ip.String(), port)
 	}
 	return
 }
 
 type gwListenerTCP struct {
-	Policy     func(*tcpip.FullAddress) string
+	Rewrite    func(net.IP) net.IP
+	Policy     func(net.IP, uint16) string
 	wq         *waiter.Queue
 	ep         tcpip.Endpoint
 	wait       waiter.Entry
@@ -394,6 +397,7 @@ func newGwListenerTCP(gw *Gateway, proto tcpip.NetworkProtocolNumber, dialer xio
 	}
 
 	ln = &gwListenerTCP{
+		Rewrite:    func(ip net.IP) net.IP { return ip },
 		wq:         &wq,
 		ep:         ep,
 		connAll:    map[string]tcpip.Endpoint{},
@@ -438,9 +442,10 @@ func (g *gwListenerTCP) procConn(ep tcpip.Endpoint, wq *waiter.Queue) {
 	}()
 	laddr, _ := ep.GetLocalAddress()
 	raddr, _ := ep.GetRemoteAddress()
+	lip := g.Rewrite(net.IP(laddr.Addr.AsSlice()))
 	uri := fmt.Sprintf("tcp://%v:%v", laddr.Addr, laddr.Port)
 	if g.Policy != nil {
-		uri = g.Policy(&laddr)
+		uri = g.Policy(lip, laddr.Port)
 	}
 	piper, err := g.Dialer.DialPiper(uri, g.BufferSize)
 	if err != nil {

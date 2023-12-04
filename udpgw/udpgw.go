@@ -310,6 +310,7 @@ type LocalAddr interface {
 
 type Conn struct {
 	MaxAlive time.Duration
+	Rewrite  func(net.IP) net.IP
 	raw      net.PacketConn
 	ipv6     bool
 	sequence uint16
@@ -321,6 +322,7 @@ type Conn struct {
 func NewConn(raw net.PacketConn, ipv6 bool) (conn *Conn) {
 	conn = &Conn{
 		MaxAlive: time.Minute,
+		Rewrite:  func(v net.IP) net.IP { return v },
 		raw:      raw,
 		ipv6:     ipv6,
 		addrAll:  map[uint16]LocalAddr{},
@@ -351,6 +353,7 @@ func (c *Conn) Read(p []byte) (n int, err error) {
 		return
 	}
 	fromAddr := from.(LocalAddr)
+	localIP := c.Rewrite(fromAddr.LocalIP())
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	c.clearTimeoutLocked()
@@ -358,10 +361,10 @@ func (c *Conn) Read(p []byte) (n int, err error) {
 	id := c.sequence
 	binary.BigEndian.PutUint16(p[1:], id)
 	if c.ipv6 {
-		copy(p[3:19], fromAddr.LocalIP().To16())
+		copy(p[3:19], localIP.To16())
 		binary.BigEndian.PutUint16(p[19:21], fromAddr.LocalPort())
 	} else {
-		copy(p[3:7], fromAddr.LocalIP().To4())
+		copy(p[3:7], localIP.To4())
 		binary.BigEndian.PutUint16(p[7:9], fromAddr.LocalPort())
 	}
 	c.addrAll[id] = fromAddr
