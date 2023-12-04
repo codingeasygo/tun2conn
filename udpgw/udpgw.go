@@ -246,7 +246,7 @@ func (u *Gateway) procRead(piped frame.ReadWriteCloser, conn *gwConn) {
 	var err error
 	defer func() {
 		if perr := recover(); perr != nil {
-			log.WarnLog("Gateway process raw read is panic by %v", perr)
+			log.WarnLog("Gateway process raw read is panic by %v, callstack is \n%v", perr, xdebug.CallStack())
 		}
 		u.connLock.Lock()
 		delete(u.connList, conn.conid)
@@ -412,12 +412,14 @@ func (c *Conn) String() string {
 }
 
 type forwarderConn struct {
+	owner      *Forwarder
 	readBuffer chan []byte
 	base       *Conn
 }
 
-func newForwarderConn(base *Conn) (conn *forwarderConn) {
+func newForwarderConn(owner *Forwarder, base *Conn) (conn *forwarderConn) {
 	conn = &forwarderConn{
+		owner:      owner,
 		readBuffer: make(chan []byte, 3),
 		base:       base,
 	}
@@ -454,7 +456,7 @@ func (c *forwarderConn) Close() (err error) {
 }
 
 type Forwarder struct {
-	Policy     func(net.IP, uint16) string
+	Policy     func(id uint16, ip net.IP, port uint16) (string, net.IP, uint16)
 	dialer     xio.PiperDialer
 	bufferSize int
 	nextAll    map[string]*forwarderConn
@@ -499,6 +501,7 @@ func (f *Forwarder) procData(conn *Conn, buffer []byte) {
 	key := "*"
 	if f.Policy != nil {
 		flags := uint8(buffer[0])
+		conid := binary.BigEndian.Uint16(buffer[1:])
 		var addrIP net.IP
 		var addrPort uint16
 		if flags&CLIENT_FLAG_IPV6 == CLIENT_FLAG_IPV6 {
@@ -508,7 +511,16 @@ func (f *Forwarder) procData(conn *Conn, buffer []byte) {
 			addrIP = net.IP(buffer[3:7])
 			addrPort = binary.BigEndian.Uint16(buffer[7:9])
 		}
-		key = f.Policy(addrIP, addrPort)
+		key, addrIP, addrPort = f.Policy(conid, addrIP, addrPort)
+		if len(addrIP) > 0 {
+			if flags&CLIENT_FLAG_IPV6 == CLIENT_FLAG_IPV6 {
+				copy(buffer[3:19], addrIP)
+				binary.BigEndian.PutUint16(buffer[19:21], addrPort)
+			} else {
+				copy(buffer[3:7], addrIP)
+				binary.BigEndian.PutUint16(buffer[7:9], addrPort)
+			}
+		}
 	}
 	f.nextLock.RLock()
 	next := f.nextAll[key]
@@ -519,7 +531,7 @@ func (f *Forwarder) procData(conn *Conn, buffer []byte) {
 			log.WarnLog("Forwarder(%v) %v dialer dial piper by %v fail with %v", conn, key, key, err)
 			return
 		}
-		next = newForwarderConn(conn)
+		next = newForwarderConn(f, conn)
 		f.nextLock.Lock()
 		f.nextAll[key] = next
 		f.nextLock.Unlock()
