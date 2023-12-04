@@ -33,7 +33,7 @@ type Gateway struct {
 	Addr       string
 	DNS        string
 	MTU        int
-	Policy     func(on string, ip net.IP, port uint16, domain, cname string) string
+	Policy     func(on string, ip net.IP, port uint16, domain, cname string) (uri string, newIP net.IP, newPort uint16)
 	Dialer     xio.PiperDialer
 	BufferSize int
 	Stack      *stack.Stack
@@ -265,15 +265,15 @@ func (g *Gateway) policyDNS(request []byte) (key string) {
 	parser := dnsmessage.Parser{}
 	_, err := parser.Start(request)
 	if err != nil {
-		key = g.Policy("dns", nil, 0, "", "")
+		key, _, _ = g.Policy("dns", nil, 0, "", "")
 		return
 	}
 	questions, _ := parser.AllQuestions()
 	if len(questions) < 1 {
-		key = g.Policy("dns", nil, 0, "", "")
+		key, _, _ = g.Policy("dns", nil, 0, "", "")
 		return
 	}
-	key = g.Policy("dns", nil, 0, questions[0].Name.String(), "")
+	key, _, _ = g.Policy("dns", nil, 0, questions[0].Name.String(), "")
 	return
 }
 
@@ -312,8 +312,7 @@ func (g *Gateway) policyUDP(id uint16, ip net.IP, port uint16) (uri string, newI
 		return
 	}
 	domain, cname, _ := g.dnsCache.Reflect(ip.String())
-	key := g.Policy("udp", ip, port, domain, cname)
-	uri = fmt.Sprintf("tcp://udpgw/%v", key)
+	uri, newIP, newPort = g.Policy("udp", ip, port, domain, cname)
 	return
 }
 
@@ -347,7 +346,7 @@ func (g *Gateway) policyTCP(ip net.IP, port uint16) (uri string) {
 		return fmt.Sprintf("tcp://%v:%v", ip, port)
 	}
 	domain, cname, _ := g.dnsCache.Reflect(ip.String())
-	uri = g.Policy("tcp", ip, port, domain, cname)
+	uri, _, _ = g.Policy("tcp", ip, port, domain, cname)
 	return
 }
 

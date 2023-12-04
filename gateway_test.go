@@ -199,8 +199,8 @@ func TestGateway(t *testing.T) {
 	gw.dnsCache.Add(pack)
 
 	{ //policy dns
-		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string) string {
-			return domain
+		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string) (string, net.IP, uint16) {
+			return domain, nil, 0
 		}
 		msg1 := dnsmessage.Message{
 			Questions: []dnsmessage.Question{
@@ -237,25 +237,25 @@ func TestGateway(t *testing.T) {
 	}
 
 	{ //policy udp
-		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string) string {
+		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string) (string, net.IP, uint16) {
 			if cname == "example.com." {
-				return cname
+				return cname, nil, 0
 			}
-			return ""
+			return "", nil, 0
 		}
 		uri, _, _ := gw.policyUDP(1, net.ParseIP("127.0.0.1"), 10)
-		if uri != "tcp://udpgw/example.com." {
+		if uri != "example.com." {
 			t.Error("errror")
 			return
 		}
 	}
 
 	{ //policy tcp
-		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string) string {
+		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string) (string, net.IP, uint16) {
 			if cname == "example.com." {
-				return cname
+				return cname, nil, 0
 			}
-			return ""
+			return "", nil, 0
 		}
 		uri := gw.policyTCP(net.ParseIP("127.0.0.1"), 0)
 		if uri != "example.com." {
