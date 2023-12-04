@@ -5,7 +5,7 @@ go 1.21.1
 toolchain go1.21.4
 
 require (
-	github.com/codingeasygo/util v0.0.0-20231202034448-7e31a61c18d8
+	github.com/codingeasygo/util v0.0.0-20231204090510-3bcb3634ed7f
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	golang.org/x/net v0.19.0
 	gvisor.dev/gvisor v0.0.0-20231202080848-1f7806d17489
