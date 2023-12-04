@@ -12,6 +12,7 @@ import (
 )
 
 type Network struct {
+	Gateway    bool //if enable to set new gateway
 	defaultGW  string
 	defaultDEV string
 	name       string
@@ -92,10 +93,10 @@ func (n *Network) Setup() (err error) {
 		if err == nil {
 			_, err = n.run("route add -net %v/%v -interface %v", n.netAddr, n.netMask, n.name)
 		}
-		if err == nil {
+		if n.Gateway && err == nil {
 			_, err = n.run("route delete default %v", n.defaultGW)
 		}
-		if err == nil {
+		if n.Gateway && err == nil {
 			_, err = n.run("route add default %v", n.gwAddr)
 		}
 	case "linux":
@@ -105,7 +106,7 @@ func (n *Network) Setup() (err error) {
 		if err == nil {
 			_, err = n.run("ip link set dev %v up", n.name)
 		}
-		if err == nil {
+		if n.Gateway && err == nil {
 			_, err = n.run("ip route replace default via %v dev %v", n.gwAddr, n.name)
 		}
 	default:
@@ -141,12 +142,16 @@ func (n *Network) Remove(netAddr string, netMask int) (err error) {
 func (n *Network) Reset() (err error) {
 	switch runtime.GOOS {
 	case "darwin":
-		_, err = n.run("route delete default %v", n.gwAddr)
-		if err == nil {
+		if n.Gateway && err == nil {
+			_, err = n.run("route delete default %v", n.gwAddr)
+		}
+		if n.Gateway && err == nil {
 			_, err = n.run("route add default %v", n.defaultGW)
 		}
 	case "linux":
-		_, err = n.run("ip route replace default via %v dev %v", n.defaultGW, n.defaultDEV)
+		if n.Gateway && err == nil {
+			_, err = n.run("ip route replace default via %v dev %v", n.defaultGW, n.defaultDEV)
+		}
 	default:
 		err = fmt.Errorf("%v is not supported", runtime.GOOS)
 	}

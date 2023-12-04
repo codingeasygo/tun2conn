@@ -96,6 +96,7 @@ func runClient() {
 	if err != nil {
 		panic(err)
 	}
+	defaultGW.Gateway = true
 	defer func() {
 		defaultGW.Remove(socksAddress.IP.String(), 32)
 		defaultGW.Reset()
