@@ -129,6 +129,10 @@ func DialGateway(uri string, bufferSize int) (raw xio.Piper, err error) {
 	return
 }
 
+func (u *Gateway) String() string {
+	return fmt.Sprintf("Gateway(%v/%v)", u.DNS, u.MaxConn)
+}
+
 func (u *Gateway) timeoutConn(max time.Duration) {
 	now := time.Now()
 	connAll := []*gwConn{}

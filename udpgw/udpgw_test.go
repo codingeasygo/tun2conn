@@ -153,6 +153,8 @@ func TestGateway(t *testing.T) {
 	gw2.Read(buffer)
 	gw2.Close()
 	gw2.Close()
+
+	fmt.Printf("info is %v\n", gw2)
 }
 
 type testPacketConn struct {
