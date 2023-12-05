@@ -58,10 +58,13 @@ func TestGateway(t *testing.T) {
 	a, b, _ := xio.Pipe()
 	gw := NewGateway()
 	gw.DNS = addrv4
+	gw2 := NewGateway()
+	gw2.DNS = addrv4
 	go gw.PipeConn(frame.NewReadWriteCloser(frame.NewDefaultHeader(), b, 1024), "tcp://localhost")
 	//
 	sender := frame.NewReadWriteCloser(frame.NewDefaultHeader(), a, 1024)
 	var back []byte
+	buffer := make([]byte, 1024)
 
 	//ipv4
 	for i := 0; i < 100; i++ {
@@ -70,6 +73,14 @@ func TestGateway(t *testing.T) {
 		back, _ = sender.ReadFrame()
 		if !bytes.Equal(back[4:], datav4[:lenv4]) {
 			fmt.Printf("back->%v,%v\n", back[4:], datav4[:lenv4])
+			t.Error("error")
+			return
+		}
+
+		gw2.Write(datav4[0:lenv4])
+		n, _ := gw2.Read(buffer)
+		if !bytes.Equal(buffer[:n], datav4[:lenv4]) {
+			fmt.Printf("back->%v,%v\n", buffer[:n], datav4[:lenv4])
 			t.Error("error")
 			return
 		}
@@ -124,12 +135,10 @@ func TestGateway(t *testing.T) {
 	//test erro
 	gw.PipeConn(&net.TCPConn{}, "")
 
-	rwc := frame.NewReadWriteCloser(frame.NewDefaultHeader(), b, 1024)
-	gw.procData(rwc, nil)
-	gw.procData(rwc, []byte{CLIENT_FLAG_KEEPALIVE, 0, 0})
-	gw.procData(rwc, []byte{0, 0, 100, 127, 0, 0, 5, 0, 0, 0, 0, 0})
-
-	gw.procRead(nil, &gwConn{raw: &net.UDPConn{}})
+	gw.recvData(nil, 0, nil)
+	gw.recvData([]byte{CLIENT_FLAG_KEEPALIVE, 0, 0}, 0, nil)
+	gw.recvData([]byte{0, 0, 100, 127, 0, 0, 5, 0, 0, 0, 0, 0}, 0, nil)
+	gw.procRead(&gwConn{raw: &net.UDPConn{}}, 0, nil)
 
 	DialGateway("test", 100)
 
@@ -137,6 +146,13 @@ func TestGateway(t *testing.T) {
 	procTimeout(time.Second)
 
 	allGateway = map[string]*Gateway{}
+
+	gw2.buffer = make(chan []byte, 1)
+	gw2.sendData(nil)
+	gw2.sendData(nil)
+	gw2.Read(buffer)
+	gw2.Close()
+	gw2.Close()
 }
 
 type testPacketConn struct {

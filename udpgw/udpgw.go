@@ -107,6 +107,7 @@ type Gateway struct {
 	MTU      int
 	DNS      *net.UDPAddr
 	MaxConn  int
+	buffer   chan []byte //buffer to read
 	connPipe io.ReadWriteCloser
 	connList map[uint16]*gwConn
 	connLock sync.RWMutex
@@ -116,6 +117,7 @@ func NewGateway() (gw *Gateway) {
 	gw = &Gateway{
 		MTU:      2048,
 		MaxConn:  16,
+		buffer:   make(chan []byte, 64),
 		connList: map[uint16]*gwConn{},
 		connLock: sync.RWMutex{},
 	}
@@ -157,6 +159,10 @@ func (u *Gateway) Close() (err error) {
 	if u.connPipe != nil {
 		u.connPipe.Close()
 	}
+	select {
+	case u.buffer <- nil:
+	default:
+	}
 	return
 }
 
@@ -186,12 +192,37 @@ func (u *Gateway) PipeConn(conn io.ReadWriteCloser, target string) (err error) {
 			err = xerr
 			break
 		}
-		u.procData(rwc, data[offset:])
+		u.recvData(data[offset:], offset, rwc.WriteFrame)
 	}
 	return
 }
 
-func (u *Gateway) procData(piped frame.ReadWriteCloser, p []byte) (n int, err error) {
+func (u *Gateway) Write(p []byte) (n int, err error) {
+	u.recvData(p, 0, u.sendData)
+	return
+}
+
+func (u *Gateway) Read(p []byte) (n int, err error) {
+	data := <-u.buffer
+	if len(data) < 1 {
+		err = fmt.Errorf("closed")
+		return
+	}
+	n = copy(p, data)
+	return
+}
+
+func (u *Gateway) sendData(p []byte) (n int, err error) {
+	data := make([]byte, len(p))
+	n = copy(data, p)
+	select {
+	case u.buffer <- p:
+	default:
+	}
+	return
+}
+
+func (u *Gateway) recvData(p []byte, offset int, write func([]byte) (int, error)) (n int, err error) {
 	if len(p) < 3 {
 		err = fmt.Errorf("data error")
 		return
@@ -234,7 +265,7 @@ func (u *Gateway) procData(piped frame.ReadWriteCloser, p []byte) (n int, err er
 		u.connLock.Lock()
 		u.connList[conid] = conn
 		u.connLock.Unlock()
-		go u.procRead(piped, conn)
+		go u.procRead(conn, offset, write)
 	}
 	conn.latest = time.Now()
 	n, err = conn.raw.Write(data)
@@ -242,7 +273,7 @@ func (u *Gateway) procData(piped frame.ReadWriteCloser, p []byte) (n int, err er
 	return
 }
 
-func (u *Gateway) procRead(piped frame.ReadWriteCloser, conn *gwConn) {
+func (u *Gateway) procRead(conn *gwConn, offset int, write func([]byte) (int, error)) {
 	var err error
 	defer func() {
 		if perr := recover(); perr != nil {
@@ -254,8 +285,7 @@ func (u *Gateway) procRead(piped frame.ReadWriteCloser, conn *gwConn) {
 		conn.raw.Close()
 		log.DebugLog("Gateway read udp from %v is closed by %v", conn.addr, err)
 	}()
-	buffer := make([]byte, u.MTU+piped.GetDataOffset())
-	offset := piped.GetDataOffset()
+	buffer := make([]byte, u.MTU+offset)
 	if conn.flags&CLIENT_FLAG_IPV6 == CLIENT_FLAG_IPV6 {
 		buffer[offset] = CLIENT_FLAG_IPV6
 	} else {
@@ -275,7 +305,7 @@ func (u *Gateway) procRead(piped frame.ReadWriteCloser, conn *gwConn) {
 		n, err = conn.raw.Read(buffer[offset:])
 		if err == nil {
 			conn.latest = time.Now()
-			_, err = piped.WriteFrame(buffer[:offset+n])
+			_, err = write(buffer[:offset+n])
 		}
 		if err != nil {
 			break
