@@ -98,7 +98,7 @@ func runClient() {
 	}
 	defaultGW.Gateway = true
 	defer func() {
-		defaultGW.Remove(socksAddress.IP.String(), 32)
+		defaultGW.RemoveRouter(socksAddress.IP.String(), 32)
 		defaultGW.Reset()
 	}()
 	log.InfoLog("tun2socks load network %v success", defaultGW)
@@ -109,7 +109,7 @@ func runClient() {
 	}
 	log.InfoLog("tun2socks setup device %v success", device.Name())
 
-	err = defaultGW.Add(socksAddress.IP.String(), 32)
+	err = defaultGW.AddRouter(socksAddress.IP.String(), 32)
 	if err != nil {
 		panic(err)
 	}
