@@ -86,6 +86,21 @@ func NewGateway(device io.ReadWriteCloser, addr, dns string) (gateway *Gateway) 
 	return
 }
 
+func NewGatewayByListen(network, address, gwAddr, gwDNS string) (gateway *Gateway, err error) {
+	conn, err := net.ListenPacket(network, address)
+	if err == nil {
+		device := NewPacketConnDevice(conn)
+		gateway = NewGateway(device, gwAddr, gwDNS)
+	}
+	return
+}
+
+func NewGatewayByFile(fd uintptr, gwAddr, gwDNS string) (gateway *Gateway) {
+	device := NewFileDevice(fd, "Gateway")
+	gateway = NewGateway(device, gwAddr, gwDNS)
+	return
+}
+
 func (g *Gateway) PolicyGFW(on string, ip net.IP, port uint16, domain, cname string) (uri string, newIP net.IP, newPort uint16) {
 
 	//proxy
@@ -224,8 +239,12 @@ func (g *Gateway) Stop() (err error) {
 	g.stopDNS()
 	g.stopUDP()
 	g.stopTCP()
-	g.link.Close()
-	g.Stack.Close()
+	if g.link != nil {
+		g.link.Close()
+	}
+	if g.Stack != nil {
+		g.Stack.Close()
+	}
 	g.stopDevice()
 	g.waiter.Wait()
 	return

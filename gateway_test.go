@@ -389,3 +389,26 @@ func (e *errWriter) Write(p []byte) (n int, err error) {
 	err = fmt.Errorf("test error")
 	return
 }
+
+func TestGatewayByListen(t *testing.T) {
+	gw, err := NewGatewayByListen("udp", "127.0.0.1:0", "10.1.1.1/24", "10.1.1.1")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	err = gw.Start()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	gw.Stop()
+
+	device := gw.device.(*PacketConnDevice)
+	device.Write(nil)
+	device.fromAddr = &net.TCPAddr{}
+	device.Write(nil)
+}
+
+func TestGatewayByFile(t *testing.T) {
+	NewGatewayByFile(0, "10.1.1.1/24", "10.1.1.1")
+}

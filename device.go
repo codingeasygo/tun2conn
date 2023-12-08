@@ -1,6 +1,8 @@
 package tun2conn
 
 import (
+	"net"
+	"os"
 	"sync"
 
 	"github.com/codingeasygo/tun2conn/log"
@@ -117,4 +119,41 @@ func (e *LinkEndpoint) Recv(p []byte) {
 		}
 	}
 	pkt.DecRef()
+}
+
+type PacketConnDevice struct {
+	net.PacketConn
+	fromAddr net.Addr
+}
+
+func NewPacketConnDevice(conn net.PacketConn) (device *PacketConnDevice) {
+	device = &PacketConnDevice{PacketConn: conn}
+	return
+}
+
+func (c *PacketConnDevice) Read(p []byte) (n int, err error) {
+	n, c.fromAddr, err = c.PacketConn.ReadFrom(p)
+	return
+}
+
+func (c *PacketConnDevice) Write(p []byte) (n int, err error) {
+	if c.fromAddr == nil {
+		n = len(p)
+	} else {
+		n, err = c.PacketConn.WriteTo(p, c.fromAddr)
+	}
+	return
+}
+
+type FileDevice struct {
+	*os.File
+	FD uintptr
+}
+
+func NewFileDevice(fd uintptr, name string) (device *FileDevice) {
+	device = &FileDevice{
+		FD:   fd,
+		File: os.NewFile(fd, name),
+	}
+	return
 }
