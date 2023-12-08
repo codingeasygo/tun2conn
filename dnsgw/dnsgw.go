@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -198,6 +199,89 @@ func (n *netConn) Query(ctx context.Context, request []byte) (response []byte, e
 	if err == nil {
 		response = buffer[:readed]
 	}
+	return
+}
+
+type Resolver struct {
+	R *net.Resolver
+}
+
+func NewResolver() (resolver *Resolver) {
+	resolver = &Resolver{
+		R: &net.Resolver{},
+	}
+	return
+}
+
+func (r *Resolver) Query(ctx context.Context, request []byte) (response []byte, err error) {
+	var parser dnsmessage.Parser
+	_, err = parser.Start(request)
+	if err != nil {
+		return
+	}
+	questions, _ := parser.AllQuestions()
+	message := dnsmessage.Message{
+		Header: dnsmessage.Header{Response: true, Authoritative: true},
+	}
+	found := false
+	for _, question := range questions {
+		switch question.Type {
+		case dnsmessage.TypeCNAME:
+			cname, _ := r.R.LookupCNAME(ctx, question.Name.String())
+			if len(cname) > 0 {
+				message.Answers = append(message.Answers, dnsmessage.Resource{
+					Header: dnsmessage.ResourceHeader{
+						Name:  question.Name,
+						Type:  question.Type,
+						Class: question.Class,
+					},
+					Body: &dnsmessage.CNAMEResource{
+						CNAME: dnsmessage.MustNewName(cname),
+					},
+				})
+				found = true
+			}
+		case dnsmessage.TypeA:
+			ip, _ := r.R.LookupIP(ctx, "ip4", strings.TrimSuffix(question.Name.String(), "."))
+			if len(ip) > 0 {
+				message.Answers = append(message.Answers, dnsmessage.Resource{
+					Header: dnsmessage.ResourceHeader{
+						Name:  question.Name,
+						Type:  question.Type,
+						Class: question.Class,
+					},
+					Body: &dnsmessage.AResource{
+						A: [4]byte(ip[0].To4()),
+					},
+				})
+				found = true
+			}
+		case dnsmessage.TypeAAAA:
+			ip, _ := r.R.LookupIP(ctx, "ip6", strings.TrimSuffix(question.Name.String(), "."))
+			if len(ip) > 0 {
+				message.Answers = append(message.Answers, dnsmessage.Resource{
+					Header: dnsmessage.ResourceHeader{
+						Name:  question.Name,
+						Type:  question.Type,
+						Class: question.Class,
+					},
+					Body: &dnsmessage.AAAAResource{
+						AAAA: [16]byte(ip[0].To16()),
+					},
+				})
+				found = true
+			}
+		}
+	}
+	if !found {
+		err = fmt.Errorf("resolve fail")
+		return
+	}
+	response, err = message.Pack()
+	return
+}
+
+func (r *Resolver) Close() (err error) {
 	return
 }
 

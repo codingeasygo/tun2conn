@@ -327,3 +327,51 @@ func TestForwarder(t *testing.T) {
 	forwarder.taskQueue <- nil
 	forwarder.addTask(nil, nil, nil)
 }
+
+func TestResolver(t *testing.T) {
+	resolver := NewResolver()
+	{
+		req := &dnsmessage.Message{
+			Questions: []dnsmessage.Question{
+				{
+					Name:  dnsmessage.MustNewName("example.com."),
+					Type:  dnsmessage.TypeCNAME,
+					Class: dnsmessage.ClassINET,
+				},
+				{
+					Name:  dnsmessage.MustNewName("example.com."),
+					Type:  dnsmessage.TypeA,
+					Class: dnsmessage.ClassINET,
+				},
+				{
+					Name:  dnsmessage.MustNewName("example.com."),
+					Type:  dnsmessage.TypeAAAA,
+					Class: dnsmessage.ClassINET,
+				},
+			},
+		}
+		request, _ := req.Pack()
+		_, err := resolver.Query(context.Background(), request)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+	}
+	{
+		req := &dnsmessage.Message{}
+		request, _ := req.Pack()
+		_, err := resolver.Query(context.Background(), request)
+		if err == nil {
+			t.Error(err)
+			return
+		}
+	}
+	{
+		_, err := resolver.Query(context.Background(), []byte{})
+		if err == nil {
+			t.Error(err)
+			return
+		}
+	}
+	resolver.Close()
+}
