@@ -13,7 +13,6 @@ import (
 	"github.com/codingeasygo/tun2conn/log"
 	"github.com/codingeasygo/util/xdebug"
 	"github.com/codingeasygo/util/xio"
-	"github.com/codingeasygo/util/xio/frame"
 	"golang.org/x/net/dns/dnsmessage"
 )
 
@@ -157,9 +156,7 @@ func (g *Gateway) procQuery(task *queryTask) {
 }
 
 func (g *Gateway) recvData(request []byte, write func([]byte) (int, error)) {
-	data := make([]byte, len(request))
-	copy(data, request)
-	task := &queryTask{request: data, write: write}
+	task := &queryTask{request: request, write: write}
 	select {
 	case g.queryTask <- task:
 	default:
@@ -180,25 +177,22 @@ func (g *Gateway) PipeConn(conn io.ReadWriteCloser, target string) (err error) {
 		log.InfoLog("%v one connection %v is stopped by %v", g, conn, err)
 	}()
 	log.InfoLog("%v one connection %v is starting", g, conn)
-	rwc, ok := conn.(frame.ReadWriteCloser)
-	if !ok {
-		err = fmt.Errorf("conn is not frame.ReadWriteCloser")
-		return
-	}
-	offset := rwc.GetDataOffset()
 	for {
-		data, xerr := rwc.ReadFrame()
+		buffer := make([]byte, g.BufferSize)
+		n, xerr := conn.Read(buffer)
 		if xerr != nil {
 			err = xerr
 			break
 		}
-		g.recvData(data[offset:], rwc.Write)
+		g.recvData(buffer[:n], conn.Write)
 	}
 	return
 }
 
 func (g *Gateway) Write(p []byte) (n int, err error) {
-	g.recvData(p, g.sendData)
+	request := make([]byte, len(p))
+	copy(request, p)
+	g.recvData(request, g.sendData)
 	return
 }
 

@@ -82,7 +82,7 @@ func TestGateway(t *testing.T) {
 		}
 
 		conn := NewConn(ln)
-		go gw.PipeConn(frame.NewRawReadWriteCloser(frame.NewDefaultHeader(), conn, 2048), "dns://resolver")
+		go gw.PipeConn(conn, "dns://resolver")
 
 		text, err := exec.Command("bash", "-c", "dig example.com @127.0.0.1 -p 10453").CombinedOutput()
 		if err != nil {
@@ -91,12 +91,6 @@ func TestGateway(t *testing.T) {
 		}
 		fmt.Printf("result is %v\n", string(text))
 		ln.Close()
-
-		err = gw.PipeConn(conn, "test")
-		if err == nil {
-			t.Error(err)
-			return
-		}
 	}
 
 	{
