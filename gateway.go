@@ -2,7 +2,6 @@ package tun2conn
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"net"
@@ -17,7 +16,6 @@ import (
 	"github.com/codingeasygo/util/converter"
 	"github.com/codingeasygo/util/xdebug"
 	"github.com/codingeasygo/util/xio"
-	"golang.org/x/net/dns/dnsmessage"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/network/arp"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
@@ -228,52 +226,22 @@ func (g *Gateway) stopDNS() {
 }
 
 func (g *Gateway) procDNS() {
-	conn := newGwConnPacketConn("dnsgw", g, g.dnsConn)
+	conn := dnsgw.NewConn(newGwConnPacketConn("dnsgw", g, g.dnsConn))
 	defer func() {
 		conn.Close()
-		g.dnsGw.Stop()
 		g.waiter.Done()
 	}()
-	g.dnsGw = dnsgw.NewForwarder()
+	g.dnsGw = dnsgw.NewForwarder(g.Dialer, g.BufferSize)
 	g.dnsGw.Policy = g.policyDNS
-	g.dnsGw.UpperAddr = map[string][]string{
-		"proxy": {"dns://proxy"},
-		"*":     {"dns://direct"},
-	}
-	g.dnsGw.Dialer = dnsgw.DialerF(g.dialDNS)
-	g.dnsGw.Start()
 	g.dnsGw.ServeConn(conn)
 }
 
-func (g *Gateway) dialDNS(ctx context.Context, addr string) (querier dnsgw.Querier, err error) {
-	piper, err := g.Dialer.DialPiper(addr, g.BufferSize)
-	if err != nil {
-		return
-	}
-	querier, ok := piper.(dnsgw.Querier)
-	if !ok {
-		querier = dnsgw.NewPiperConn(addr, piper)
-	}
-	return
-}
-
-func (g *Gateway) policyDNS(request []byte) (key string) {
+func (g *Gateway) policyDNS(conid uint16, domain ...string) (key string) {
 	if g.Policy == nil {
-		key = "*"
+		key = "tcp://dnsgw"
 		return
 	}
-	parser := dnsmessage.Parser{}
-	_, err := parser.Start(request)
-	if err != nil {
-		key, _, _ = g.Policy("dns", nil, 0, "", "")
-		return
-	}
-	questions, _ := parser.AllQuestions()
-	if len(questions) < 1 {
-		key, _, _ = g.Policy("dns", nil, 0, "", "")
-		return
-	}
-	key, _, _ = g.Policy("dns", nil, 0, questions[0].Name.String(), "")
+	key, _, _ = g.Policy("dns", nil, 0, domain[0], "")
 	return
 }
 

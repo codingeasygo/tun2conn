@@ -1,7 +1,6 @@
 package tun2conn
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net"
@@ -14,7 +13,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codingeasygo/tun2conn/dnsgw"
 	"github.com/codingeasygo/util/xio"
+	"github.com/codingeasygo/util/xio/frame"
 	"github.com/songgao/water"
 	"golang.org/x/net/dns/dnsmessage"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -43,6 +44,15 @@ func runConfig(name, netAddr, gwAddr string) (err error) {
 	return
 }
 
+type forwardPiper struct {
+	xio.Piper
+}
+
+func (f *forwardPiper) PipeConn(conn io.ReadWriteCloser, target string) (err error) {
+	err = f.Piper.PipeConn(frame.NewRawReadWriteCloser(frame.NewDefaultHeader(), conn, 2048), target)
+	return
+}
+
 func TestGateway(t *testing.T) {
 	// maddr, _ := net.ParseMAC("aa:00:01:01:01:01")
 	device, err := water.New(water.Config{
@@ -60,6 +70,10 @@ func TestGateway(t *testing.T) {
 	var dialErrr error
 	gw := NewGateway(device, "10.1.1.1/24", "10.1.1.1")
 	gw.Dialer = xio.PiperDialerF(func(uri string, bufferSize int) (raw xio.Piper, err error) {
+		if uri == "tcp://dnsgw" {
+			raw = &forwardPiper{Piper: dnsgw.NewGateway(1)}
+			return
+		}
 		if dialErrr != nil {
 			err = dialErrr
 			return
@@ -68,7 +82,7 @@ func TestGateway(t *testing.T) {
 			err = fmt.Errorf("test error")
 			return
 		}
-		fmt.Printf("dial to %v", uri)
+		fmt.Printf("dial to %v\n", uri)
 		raw = xio.NewEchoPiper(bufferSize)
 		return
 	})
@@ -132,25 +146,12 @@ func TestGateway(t *testing.T) {
 	}
 
 	{ //udp
-		conn, err := net.Dial("udp", "10.1.1.1:53")
+		text, err := exec.Command("bash", "-c", "dig example.com @10.1.1.1").CombinedOutput()
 		if err != nil {
 			t.Error(err)
 			return
 		}
-		fmt.Fprintf(conn, "abc")
-
-		buffer := make([]byte, 1024)
-		n, err := conn.Read(buffer)
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		fmt.Printf("read->%v\n", buffer[0:n])
-		conn.Close()
-
-		dialErrr = fmt.Errorf("test error")
-		gw.dialDNS(context.Background(), "test")
-		dialErrr = nil
+		fmt.Printf("result is %v\n", string(text))
 	}
 
 	gw.Stop()
@@ -202,35 +203,8 @@ func TestGateway(t *testing.T) {
 		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string) (string, net.IP, uint16) {
 			return domain, nil, 0
 		}
-		msg1 := dnsmessage.Message{
-			Questions: []dnsmessage.Question{
-				{
-					Name:  dnsmessage.MustNewName("example.com."),
-					Type:  dnsmessage.TypeA,
-					Class: dnsmessage.ClassINET,
-				},
-			},
-		}
-		pack1, err := msg1.Pack()
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		msg2 := dnsmessage.Message{}
-		pack2, err := msg2.Pack()
-		if err != nil {
-			t.Error(err)
-			return
-		}
-		if key := gw.policyDNS(nil); key != "" {
-			t.Error("error")
-			return
-		}
-		if key := gw.policyDNS(pack1); key != "example.com." {
-			t.Error("error")
-			return
-		}
-		if key := gw.policyDNS(pack2); key != "" {
+		key := gw.policyDNS(1, "example.com")
+		if key != "example.com" {
 			t.Error("error")
 			return
 		}

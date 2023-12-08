@@ -130,7 +130,7 @@ func DialGateway(uri string, bufferSize int) (raw xio.Piper, err error) {
 }
 
 func (u *Gateway) String() string {
-	return fmt.Sprintf("Gateway(%v/%v)", u.DNS, u.MaxConn)
+	return fmt.Sprintf("Gateway(udp/%v/%v)", u.DNS, u.MaxConn)
 }
 
 func (u *Gateway) timeoutConn(max time.Duration) {
