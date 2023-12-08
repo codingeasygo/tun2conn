@@ -96,7 +96,7 @@ type queryTask struct {
 }
 
 type Gateway struct {
-	BufferSize int
+	MTU        int
 	Timeout    time.Duration
 	runner     int
 	resolver   *Resolver
@@ -107,7 +107,7 @@ type Gateway struct {
 
 func NewGateway(runner int) (gw *Gateway) {
 	gw = &Gateway{
-		BufferSize: 2048,
+		MTU:        2048,
 		Timeout:    5 * time.Second,
 		runner:     runner,
 		resolver:   &Resolver{},
@@ -178,7 +178,7 @@ func (g *Gateway) PipeConn(conn io.ReadWriteCloser, target string) (err error) {
 	}()
 	log.InfoLog("%v one connection %v is starting", g, conn)
 	for {
-		buffer := make([]byte, g.BufferSize)
+		buffer := make([]byte, g.MTU)
 		n, xerr := conn.Read(buffer)
 		if xerr != nil {
 			err = xerr
