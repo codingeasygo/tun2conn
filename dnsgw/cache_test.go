@@ -98,11 +98,7 @@ func TestCache(t *testing.T) {
 	os.WriteFile("cache.json", []byte("xxxx"), os.ModePerm)
 	cache3 := NewCache()
 	cache3.SaveFile = "cache.json"
-	err = cache3.Start()
-	if err == nil {
-		t.Error(err)
-		return
-	}
+	cache3.Start()
 
 	cache3 = NewCache()
 	cache3.SaveFile = "none/cache.json"

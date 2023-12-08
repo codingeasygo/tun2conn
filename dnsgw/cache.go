@@ -147,7 +147,7 @@ func (c *Cache) loopStore() {
 func (c *Cache) Start() (err error) {
 	err = c.Resume(c.SaveFile)
 	if err != nil && !os.IsNotExist(err) {
-		return
+		log.WarnLog("Cache resume from %v fail with %v", c.SaveFile, err)
 	}
 	err = nil
 	c.waiter.Add(1)

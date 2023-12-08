@@ -69,6 +69,7 @@ func TestGateway(t *testing.T) {
 	}
 	var dialErrr error
 	gw := NewGateway(device, "10.1.1.1/24", "10.1.1.1")
+	gw.Cache = "cache"
 	gw.Dialer = xio.PiperDialerF(func(uri string, bufferSize int) (raw xio.Piper, err error) {
 		if uri == "tcp://dnsgw" {
 			raw = &forwardPiper{Piper: dnsgw.NewGateway(1)}

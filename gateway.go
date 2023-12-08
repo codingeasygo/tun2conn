@@ -6,6 +6,8 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +32,7 @@ type Gateway struct {
 	MAC        string
 	Addr       string
 	DNS        string
+	Cache      string
 	MTU        int
 	Policy     func(on string, ip net.IP, port uint16, domain, cname string) (uri string, newIP net.IP, newPort uint16)
 	Dialer     xio.PiperDialer
@@ -216,12 +219,20 @@ func (g *Gateway) startDNS() (err error) {
 	g.dnsConn = dnsConn
 	g.waiter.Add(1)
 	go g.procDNS()
+	if len(g.Cache) > 0 {
+		os.MkdirAll(g.Cache, os.ModePerm)
+		g.dnsCache.SaveFile = filepath.Join(g.Cache, "dns.cache")
+		g.dnsCache.Start()
+	}
 	return
 }
 
 func (g *Gateway) stopDNS() {
 	if g.dnsConn != nil {
 		g.dnsConn.Close()
+	}
+	if len(g.Cache) > 0 {
+		g.dnsCache.Stop()
 	}
 }
 
