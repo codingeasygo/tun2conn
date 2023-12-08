@@ -239,6 +239,22 @@ func TestGateway(t *testing.T) {
 		}
 	}
 
+	{ //policy mode
+		gw.Mode = ProxyAllMode
+		uri, _, _ := gw.PolicyGFW("tcp", net.ParseIP("127.0.0.1"), 0, "example.com", "")
+		if uri != ".*->tcp://127.0.0.1:0" {
+			t.Error("errror")
+			return
+		}
+
+		gw.Mode = ProxyNoneMode
+		uri, _, _ = gw.PolicyGFW("tcp", net.ParseIP("127.0.0.1"), 0, "example.com", "")
+		if uri != "tcp://127.0.0.1:0" {
+			t.Error("errror")
+			return
+		}
+	}
+
 	gw6 := NewGateway(device, "2001:db8:0:1:1:1:1:1/24", "2001:db8:0:1:1:1:1:1")
 	err = gw6.Start()
 	if err != nil {

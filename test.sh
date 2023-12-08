@@ -5,6 +5,7 @@ set -e
 echo "Running Test"
 pkgs="\
     github.com/codingeasygo/tun2conn/dnsgw\
+    github.com/codingeasygo/tun2conn/gfw\
     github.com/codingeasygo/tun2conn/log\
     github.com/codingeasygo/tun2conn/udpgw\
     github.com/codingeasygo/tun2conn\

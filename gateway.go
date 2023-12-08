@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/codingeasygo/tun2conn/dnsgw"
+	"github.com/codingeasygo/tun2conn/gfw"
 	"github.com/codingeasygo/tun2conn/log"
 	"github.com/codingeasygo/tun2conn/udpgw"
 	"github.com/codingeasygo/util/converter"
@@ -28,6 +29,14 @@ import (
 	"gvisor.dev/gvisor/pkg/waiter"
 )
 
+type ProxyMode string
+
+const (
+	ProxyAllMode  ProxyMode = "all"
+	ProxyAutoMode ProxyMode = "auto"
+	ProxyNoneMode ProxyMode = "none"
+)
+
 type Gateway struct {
 	MAC        string
 	Addr       string
@@ -35,9 +44,12 @@ type Gateway struct {
 	Cache      string
 	MTU        int
 	Policy     func(on string, ip net.IP, port uint16, domain, cname string) (uri string, newIP net.IP, newPort uint16)
+	Channel    func(on string, ip net.IP, port uint16, domain, cname string) string
 	Dialer     xio.PiperDialer
 	BufferSize int
 	Stack      *stack.Stack
+	GFW        *gfw.GFW
+	Mode       ProxyMode
 	device     io.ReadWriteCloser
 	link       *LinkEndpoint
 	proto      tcpip.NetworkProtocolNumber
@@ -59,14 +71,58 @@ func NewGateway(device io.ReadWriteCloser, addr, dns string) (gateway *Gateway) 
 		MTU:        1500,
 		Dialer:     xio.PiperDialerF(xio.DialNetPiper),
 		BufferSize: 2048,
+		GFW:        gfw.NewGFW(),
+		Channel:    func(on string, ip net.IP, port uint16, domain, cname string) string { return ".*" },
+		Mode:       ProxyAutoMode,
 		device:     device,
 		dnsCache:   dnsgw.NewCache(),
 		waiter:     sync.WaitGroup{},
 	}
+	gateway.Policy = gateway.PolicyGFW
 	gateway.Stack = stack.New(stack.Options{
 		NetworkProtocols:   []stack.NetworkProtocolFactory{ipv4.NewProtocol, ipv6.NewProtocol, arp.NewProtocol},
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol},
 	})
+	return
+}
+
+func (g *Gateway) PolicyGFW(on string, ip net.IP, port uint16, domain, cname string) (uri string, newIP net.IP, newPort uint16) {
+
+	//proxy
+	proxy := false
+	switch g.Mode {
+	case ProxyAllMode:
+		proxy = true
+	case ProxyAutoMode:
+		switch on {
+		case "dns":
+			proxy = len(domain) > 0 && g.GFW.IsProxy(domain)
+		default:
+			proxy = (len(cname) > 0 && g.GFW.IsProxy(cname)) || (len(domain) > 0 && g.GFW.IsProxy(domain)) || (len(ip) > 0 && g.GFW.IsProxy(ip.String()))
+		}
+	default:
+		proxy = false
+	}
+
+	//channel
+	channel := ""
+	if proxy {
+		channel = g.Channel(on, ip, port, domain, cname)
+	}
+	if len(channel) > 0 {
+		channel += "->"
+	}
+
+	//uri
+	switch on {
+	case "dns":
+		uri = channel + "tcp://dnsgw"
+	case "udp":
+		uri = channel + "tcp://udpgw"
+	default:
+		uri = channel + fmt.Sprintf("tcp://%v:%v", ip, port)
+	}
+	newIP, newPort = ip, port
 	return
 }
 
@@ -248,10 +304,6 @@ func (g *Gateway) procDNS() {
 }
 
 func (g *Gateway) policyDNS(conid uint16, domain ...string) (key string) {
-	if g.Policy == nil {
-		key = "tcp://dnsgw"
-		return
-	}
 	key, _, _ = g.Policy("dns", nil, 0, domain[0], "")
 	return
 }
@@ -286,10 +338,6 @@ func (g *Gateway) procUDP() {
 }
 
 func (g *Gateway) policyUDP(id uint16, ip net.IP, port uint16) (uri string, newIP net.IP, newPort uint16) {
-	if g.Policy == nil {
-		uri = "tcp://udpgw"
-		return
-	}
 	domain, cname, _ := g.dnsCache.Reflect(ip.String())
 	uri, newIP, newPort = g.Policy("udp", ip, port, domain, cname)
 	return
@@ -321,9 +369,6 @@ func (g *Gateway) procTCP() {
 }
 
 func (g *Gateway) policyTCP(ip net.IP, port uint16) (uri string) {
-	if g.Policy == nil {
-		return fmt.Sprintf("tcp://%v:%v", ip, port)
-	}
 	domain, cname, _ := g.dnsCache.Reflect(ip.String())
 	uri, _, _ = g.Policy("tcp", ip, port, domain, cname)
 	return
