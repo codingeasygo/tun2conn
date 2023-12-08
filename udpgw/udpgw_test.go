@@ -56,13 +56,18 @@ func TestGateway(t *testing.T) {
 		}
 	}()
 	a, b, _ := xio.Pipe()
+	a2, b2, _ := xio.Pipe()
 	gw := NewGateway()
 	gw.DNS = addrv4
 	gw2 := NewGateway()
 	gw2.DNS = addrv4
+	gw3 := NewGateway()
+	gw3.DNS = addrv4
 	go gw.PipeConn(frame.NewReadWriteCloser(frame.NewDefaultHeader(), b, 1024), "tcp://localhost")
+	go gw2.PipeConn(b2, "tcp://localhost")
 	//
 	sender := frame.NewReadWriteCloser(frame.NewDefaultHeader(), a, 1024)
+	sender2 := a2
 	var back []byte
 	buffer := make([]byte, 1024)
 
@@ -77,8 +82,16 @@ func TestGateway(t *testing.T) {
 			return
 		}
 
-		gw2.Write(datav4[0:lenv4])
-		n, _ := gw2.Read(buffer)
+		sender2.Write(datav4[0:lenv4])
+		n, _ := sender2.Read(buffer)
+		if !bytes.Equal(buffer[:n], datav4[:lenv4]) {
+			fmt.Printf("back->%v,%v\n", buffer[:n], datav4[:lenv4])
+			t.Error("error")
+			return
+		}
+
+		gw3.Write(datav4[0:lenv4])
+		n, _ = gw3.Read(buffer)
 		if !bytes.Equal(buffer[:n], datav4[:lenv4]) {
 			fmt.Printf("back->%v,%v\n", buffer[:n], datav4[:lenv4])
 			t.Error("error")
@@ -133,7 +146,7 @@ func TestGateway(t *testing.T) {
 
 	//
 	//test erro
-	gw.PipeConn(&net.TCPConn{}, "")
+	// gw.PipeConn(&net.TCPConn{}, "")
 
 	gw.recvData(nil, 0, nil)
 	gw.recvData([]byte{CLIENT_FLAG_KEEPALIVE, 0, 0}, 0, nil)

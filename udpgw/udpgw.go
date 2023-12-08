@@ -13,6 +13,7 @@ import (
 	"github.com/codingeasygo/tun2conn/log"
 	"github.com/codingeasygo/util/xdebug"
 	"github.com/codingeasygo/util/xio"
+	"github.com/codingeasygo/util/xio/frame"
 )
 
 const CLIENT_FLAG_KEEPALIVE = (1 << 0)
@@ -183,14 +184,26 @@ func (u *Gateway) PipeConn(conn io.ReadWriteCloser, target string) (err error) {
 	allGatewayLock.Lock()
 	allGateway[fmt.Sprintf("%p", u)] = u
 	allGatewayLock.Unlock()
-	buffer := make([]byte, u.MTU)
-	for {
-		n, xerr := conn.Read(buffer)
-		if xerr != nil {
-			err = xerr
-			break
+	if rwc, ok := conn.(frame.ReadWriteCloser); ok {
+		offset := rwc.GetDataOffset()
+		for {
+			data, xerr := rwc.ReadFrame()
+			if xerr != nil {
+				err = xerr
+				break
+			}
+			u.recvData(data[offset:], offset, rwc.WriteFrame)
 		}
-		u.recvData(buffer[:n], 0, conn.Write)
+	} else {
+		buffer := make([]byte, u.MTU)
+		for {
+			n, xerr := conn.Read(buffer)
+			if xerr != nil {
+				err = xerr
+				break
+			}
+			u.recvData(buffer[:n], 0, conn.Write)
+		}
 	}
 	return
 }
