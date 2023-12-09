@@ -16,6 +16,8 @@ import (
 	"github.com/codingeasygo/util/xio/frame"
 )
 
+var Dialer = &net.Dialer{}
+
 const CLIENT_FLAG_KEEPALIVE = (1 << 0)
 const CLIENT_FLAG_REBIND = (1 << 1)
 const CLIENT_FLAG_DNS = (1 << 2)
@@ -266,11 +268,19 @@ func (u *Gateway) recvData(p []byte, offset int, write func([]byte) (int, error)
 		if flags&CLIENT_FLAG_DNS == CLIENT_FLAG_DNS && u.DNS != nil {
 			addr = u.DNS
 		}
-		conn = &gwConn{conid: conid, flags: flags, addr: addr, orig: orig, latest: time.Now()}
-		conn.raw, err = net.DialUDP("udp", nil, addr)
+		var raw net.Conn
+		raw, err = Dialer.Dial("udp", addr.String())
 		if err != nil {
 			log.WarnLog("Gateway udp dial to %v fail with %v", addr, err)
 			return
+		}
+		conn = &gwConn{
+			conid:  conid,
+			flags:  flags,
+			addr:   addr,
+			orig:   orig,
+			latest: time.Now(),
+			raw:    raw.(*net.UDPConn),
 		}
 		log.DebugLog("Gateway udp dial to %v success", addr)
 		u.connLock.Lock()
