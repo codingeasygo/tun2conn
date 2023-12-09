@@ -332,6 +332,9 @@ func (c *forwarderConn) send(data []byte) {
 
 func (c *forwarderConn) Write(p []byte) (n int, err error) {
 	n, err = c.base.Write(p)
+	if c.owner != nil && c.owner.Cache != nil {
+		c.owner.Cache.Add(p[2:])
+	}
 	return
 }
 
@@ -341,7 +344,8 @@ func (c *forwarderConn) Close() (err error) {
 }
 
 type Forwarder struct {
-	Policy     func(id uint16, domain ...string) string
+	Policy     func(id uint16, questions []string) string
+	Cache      *Cache
 	dialer     xio.PiperDialer
 	bufferSize int
 	nextAll    map[string]*forwarderConn
@@ -391,13 +395,13 @@ func (f *Forwarder) procData(conn *Conn, buffer []byte) {
 			log.WarnLog("Forward(%v) parse dns message fail with %v", conn, err)
 			return
 		}
-		questions, _ := parser.AllQuestions()
-		domains := []string{}
-		for _, question := range questions {
-			domains = append(domains, question.Name.String())
+		questions := []string{}
+		qs, _ := parser.AllQuestions()
+		for _, q := range qs {
+			questions = append(questions, q.Name.String())
 		}
 		conid := binary.BigEndian.Uint16(buffer[0:])
-		key = f.Policy(conid, domains...)
+		key = f.Policy(conid, questions)
 	}
 	f.nextLock.RLock()
 	next := f.nextAll[key]

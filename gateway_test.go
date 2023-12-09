@@ -201,10 +201,10 @@ func TestGateway(t *testing.T) {
 	gw.dnsCache.Add(pack)
 
 	{ //policy dns
-		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string) (string, net.IP, uint16) {
-			return domain, nil, 0
+		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string, questions []string) (string, net.IP, uint16) {
+			return questions[0], nil, 0
 		}
-		key := gw.policyDNS(1, "example.com")
+		key := gw.policyDNS(1, []string{"example.com"})
 		if key != "example.com" {
 			t.Error("error")
 			return
@@ -212,13 +212,13 @@ func TestGateway(t *testing.T) {
 	}
 
 	{ //policy udp
-		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string) (string, net.IP, uint16) {
+		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string, questions []string) (string, net.IP, uint16) {
 			if cname == "example.com." {
 				return cname, nil, 0
 			}
 			return "", nil, 0
 		}
-		uri, _, _ := gw.policyUDP(1, net.ParseIP("127.0.0.1"), 10)
+		uri, _, _ := gw.policyUDP(1, net.ParseIP("127.0.0.1"), 10, nil)
 		if uri != "example.com." {
 			t.Error("errror")
 			return
@@ -226,7 +226,7 @@ func TestGateway(t *testing.T) {
 	}
 
 	{ //policy tcp
-		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string) (string, net.IP, uint16) {
+		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string, questions []string) (string, net.IP, uint16) {
 			if cname == "example.com." {
 				return cname, nil, 0
 			}
@@ -241,14 +241,14 @@ func TestGateway(t *testing.T) {
 
 	{ //policy mode
 		gw.Mode = ProxyAllMode
-		uri, _, _ := gw.PolicyGFW("tcp", net.ParseIP("127.0.0.1"), 0, "example.com", "")
+		uri, _, _ := gw.PolicyGFW("tcp", net.ParseIP("127.0.0.1"), 0, "example.com", "", nil)
 		if uri != ".*->tcp://127.0.0.1:0" {
 			t.Error("errror")
 			return
 		}
 
 		gw.Mode = ProxyNoneMode
-		uri, _, _ = gw.PolicyGFW("tcp", net.ParseIP("127.0.0.1"), 0, "example.com", "")
+		uri, _, _ = gw.PolicyGFW("tcp", net.ParseIP("127.0.0.1"), 0, "example.com", "", nil)
 		if uri != "tcp://127.0.0.1:0" {
 			t.Error("errror")
 			return

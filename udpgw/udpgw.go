@@ -10,10 +10,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/codingeasygo/tun2conn/dnsgw"
 	"github.com/codingeasygo/tun2conn/log"
 	"github.com/codingeasygo/util/xdebug"
 	"github.com/codingeasygo/util/xio"
 	"github.com/codingeasygo/util/xio/frame"
+	"golang.org/x/net/dns/dnsmessage"
 )
 
 var Dialer = &net.Dialer{}
@@ -405,6 +407,9 @@ func (c *Conn) Read(p []byte) (n int, err error) {
 	}
 	fromAddr := from.(LocalAddr)
 	localIP := c.Rewrite(fromAddr.LocalIP())
+	if fromAddr.LocalPort() == 53 {
+		p[0] |= CLIENT_FLAG_DNS
+	}
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	c.clearTimeoutLocked()
@@ -498,6 +503,14 @@ func (c *forwarderConn) send(data []byte) {
 
 func (c *forwarderConn) Write(p []byte) (n int, err error) {
 	n, err = c.base.Write(p)
+	flags := uint8(p[0])
+	if c.owner != nil && c.owner.Cache != nil && flags&CLIENT_FLAG_DNS == CLIENT_FLAG_DNS {
+		if flags&CLIENT_FLAG_IPV6 == CLIENT_FLAG_IPV6 {
+			c.owner.Cache.Add(p[21:])
+		} else {
+			c.owner.Cache.Add(p[9:])
+		}
+	}
 	return
 }
 
@@ -507,7 +520,8 @@ func (c *forwarderConn) Close() (err error) {
 }
 
 type Forwarder struct {
-	Policy     func(id uint16, ip net.IP, port uint16) (string, net.IP, uint16)
+	Policy     func(id uint16, ip net.IP, port uint16, questions []string) (string, net.IP, uint16)
+	Cache      *dnsgw.Cache
 	dialer     xio.PiperDialer
 	bufferSize int
 	nextAll    map[string]*forwarderConn
@@ -555,14 +569,30 @@ func (f *Forwarder) procData(conn *Conn, buffer []byte) {
 		conid := binary.BigEndian.Uint16(buffer[1:])
 		var addrIP net.IP
 		var addrPort uint16
+		var dataOffset int
 		if flags&CLIENT_FLAG_IPV6 == CLIENT_FLAG_IPV6 {
 			addrIP = net.IP(buffer[3:19])
 			addrPort = binary.BigEndian.Uint16(buffer[19:21])
+			dataOffset = 21
 		} else {
 			addrIP = net.IP(buffer[3:7])
 			addrPort = binary.BigEndian.Uint16(buffer[7:9])
+			dataOffset = 9
 		}
-		key, addrIP, addrPort = f.Policy(conid, addrIP, addrPort)
+		questions := []string{}
+		if flags&CLIENT_FLAG_DNS == CLIENT_FLAG_DNS {
+			var parser dnsmessage.Parser
+			_, err := parser.Start(buffer[dataOffset:])
+			if err != nil {
+				log.WarnLog("Forward(%v) parse dns message fail with %v", conn, err)
+			} else {
+				qs, _ := parser.AllQuestions()
+				for _, q := range qs {
+					questions = append(questions, q.Name.String())
+				}
+			}
+		}
+		key, addrIP, addrPort = f.Policy(conid, addrIP, addrPort, questions)
 		if len(addrIP) > 0 {
 			if flags&CLIENT_FLAG_IPV6 == CLIENT_FLAG_IPV6 {
 				copy(buffer[3:19], addrIP)

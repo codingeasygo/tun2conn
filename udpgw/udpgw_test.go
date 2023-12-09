@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codingeasygo/tun2conn/dnsgw"
 	"github.com/codingeasygo/util/xhttp"
 	"github.com/codingeasygo/util/xio"
 	"github.com/codingeasygo/util/xio/frame"
@@ -344,13 +345,53 @@ func TestForwarder(t *testing.T) {
 			return
 		})
 		forwarder := NewForwarder(dialer, 2048)
-		forwarder.Policy = func(conid uint16, i net.IP, p uint16) (string, net.IP, uint16) { return "*", nil, 0 }
+		forwarder.Cache = dnsgw.NewCache()
+		forwarder.Policy = func(conid uint16, i net.IP, p uint16, questions []string) (string, net.IP, uint16) {
+			return "*", nil, 0
+		}
 		go forwarder.ServeConn(conn)
 
 		pc.Send <- []byte("abc")
-		time.Sleep(time.Second)
 		data := <-pc.Recv
 		if !bytes.Equal(data, []byte("abc")) {
+			t.Errorf("recv:%x", string(data))
+			return
+		}
+		pc.Send <- nil
+
+		conn.Close()
+		<-pc.Done
+	}
+	{ //dns
+		pc := newTestPacketConn()
+		pc.LAddr = &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: 53}
+		pc.RAddr = lv4.LocalAddr()
+		conn := NewConn(pc, false)
+
+		dialer := xio.PiperDialerF(func(uri string, bufferSize int) (raw xio.Piper, err error) {
+			gw := NewGateway()
+			gw.DNS = lv4.LocalAddr().(*net.UDPAddr)
+			raw = &forwardPiper{Piper: gw}
+			return
+		})
+		forwarder := NewForwarder(dialer, 2048)
+		forwarder.Cache = dnsgw.NewCache()
+		forwarder.Policy = func(conid uint16, i net.IP, p uint16, questions []string) (string, net.IP, uint16) {
+			return "*", nil, 0
+		}
+		go forwarder.ServeConn(conn)
+
+		pc.Send <- []byte("abc")
+		data := <-pc.Recv
+		if !bytes.Equal(data, []byte("abc")) {
+			t.Errorf("recv:%x", string(data))
+			return
+		}
+
+		request := []byte{58, 73, 1, 32, 0, 1, 0, 0, 0, 0, 0, 1, 5, 98, 97, 105, 100, 117, 3, 99, 111, 109, 0, 0, 1, 0, 1, 0, 0, 41, 16, 0, 0, 0, 0, 0, 0, 0}
+		pc.Send <- request
+		data = <-pc.Recv
+		if len(data) < 3 {
 			t.Errorf("recv:%x", string(data))
 			return
 		}
@@ -370,13 +411,12 @@ func TestForwarder(t *testing.T) {
 			return
 		})
 		forwarder := NewForwarder(dialer, 2048)
-		forwarder.Policy = func(conid uint16, i net.IP, p uint16) (string, net.IP, uint16) {
+		forwarder.Policy = func(conid uint16, i net.IP, p uint16, questions []string) (string, net.IP, uint16) {
 			return "*", net.ParseIP("127.0.0.1"), p
 		}
 		go forwarder.ServeConn(conn)
 
 		pc.Send <- []byte("abc")
-		time.Sleep(time.Second)
 		data := <-pc.Recv
 		if !bytes.Equal(data, []byte("abc")) {
 			t.Errorf("recv:%x", string(data))
@@ -399,7 +439,7 @@ func TestForwarder(t *testing.T) {
 			return
 		})
 		forwarder := NewForwarder(dialer, 2048)
-		forwarder.Policy = func(conid uint16, i net.IP, p uint16) (string, net.IP, uint16) {
+		forwarder.Policy = func(conid uint16, i net.IP, p uint16, questions []string) (string, net.IP, uint16) {
 			return "*", net.ParseIP("127.0.0.1"), p
 		}
 
@@ -407,19 +447,26 @@ func TestForwarder(t *testing.T) {
 
 		forwarder.procData(conn, []byte{CLIENT_FLAG_IPV6, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
 
-		forwarder.Policy = func(conid uint16, i net.IP, p uint16) (string, net.IP, uint16) { return "none", nil, 0 }
+		forwarder.Policy = func(conid uint16, i net.IP, p uint16, questions []string) (string, net.IP, uint16) {
+			return "none", nil, 0
+		}
 		forwarder.procData(conn, []byte{CLIENT_FLAG_IPV6, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
 
 		dialer = xio.PiperDialerF(func(uri string, bufferSize int) (raw xio.Piper, err error) {
 			return nil, fmt.Errorf("test error")
 		})
 		forwarder = NewForwarder(dialer, 2048)
-		forwarder.Policy = func(conid uint16, i net.IP, p uint16) (string, net.IP, uint16) { return "error", nil, 0 }
+		forwarder.Policy = func(conid uint16, i net.IP, p uint16, questions []string) (string, net.IP, uint16) {
+			return "error", nil, 0
+		}
 		forwarder.procData(conn, []byte{CLIENT_FLAG_IPV6, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
 
 		//cover
-		fc := &forwarderConn{}
+		forwarder = NewForwarder(dialer, 2048)
+		forwarder.Cache = dnsgw.NewCache()
+		fc := &forwarderConn{base: conn, owner: forwarder}
 		fc.send([]byte("abc"))
 		fc.send([]byte("abc"))
+		fc.Write([]byte{CLIENT_FLAG_IPV6 | CLIENT_FLAG_DNS, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
 	}
 }

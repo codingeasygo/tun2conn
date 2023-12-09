@@ -43,8 +43,8 @@ type Gateway struct {
 	DNS        string
 	Cache      string
 	MTU        int
-	Policy     func(on string, ip net.IP, port uint16, domain, cname string) (uri string, newIP net.IP, newPort uint16)
-	Channel    func(on string, ip net.IP, port uint16, domain, cname string) string
+	Policy     func(on string, ip net.IP, port uint16, domain, cname string, questions []string) (uri string, newIP net.IP, newPort uint16)
+	Channel    func(on string, ip net.IP, port uint16, domain, cname string, questions []string) string
 	Dialer     xio.PiperDialer
 	BufferSize int
 	Stack      *stack.Stack
@@ -72,7 +72,7 @@ func NewGateway(device io.ReadWriteCloser, addr, dns string) (gateway *Gateway) 
 		Dialer:     xio.PiperDialerF(xio.DialNetPiper),
 		BufferSize: 2048,
 		GFW:        gfw.NewGFW(),
-		Channel:    func(on string, ip net.IP, port uint16, domain, cname string) string { return ".*" },
+		Channel:    func(on string, ip net.IP, port uint16, domain, cname string, questions []string) string { return ".*" },
 		Mode:       ProxyAutoMode,
 		device:     device,
 		dnsCache:   dnsgw.NewCache(),
@@ -101,7 +101,7 @@ func NewGatewayByFile(fd uintptr, gwAddr, gwDNS string) (gateway *Gateway) {
 	return
 }
 
-func (g *Gateway) PolicyGFW(on string, ip net.IP, port uint16, domain, cname string) (uri string, newIP net.IP, newPort uint16) {
+func (g *Gateway) PolicyGFW(on string, ip net.IP, port uint16, domain, cname string, questions []string) (uri string, newIP net.IP, newPort uint16) {
 
 	//proxy
 	proxy := false
@@ -122,7 +122,7 @@ func (g *Gateway) PolicyGFW(on string, ip net.IP, port uint16, domain, cname str
 	//channel
 	channel := ""
 	if proxy {
-		channel = g.Channel(on, ip, port, domain, cname)
+		channel = g.Channel(on, ip, port, domain, cname, questions)
 	}
 	if len(channel) > 0 {
 		channel += "->"
@@ -223,6 +223,11 @@ func (g *Gateway) Start() (err error) {
 		}
 	}()
 	g.startDevice()
+	if len(g.Cache) > 0 {
+		os.MkdirAll(g.Cache, os.ModePerm)
+		g.dnsCache.SaveFile = filepath.Join(g.Cache, "dns.cache")
+		g.dnsCache.Start()
+	}
 	if len(g.DNS) > 0 && err == nil {
 		err = g.startDNS()
 	}
@@ -294,11 +299,6 @@ func (g *Gateway) startDNS() (err error) {
 	g.dnsConn = dnsConn
 	g.waiter.Add(1)
 	go g.procDNS()
-	if len(g.Cache) > 0 {
-		os.MkdirAll(g.Cache, os.ModePerm)
-		g.dnsCache.SaveFile = filepath.Join(g.Cache, "dns.cache")
-		g.dnsCache.Start()
-	}
 	return
 }
 
@@ -318,12 +318,13 @@ func (g *Gateway) procDNS() {
 		g.waiter.Done()
 	}()
 	g.dnsGw = dnsgw.NewForwarder(g.Dialer, g.BufferSize)
+	g.dnsGw.Cache = g.dnsCache
 	g.dnsGw.Policy = g.policyDNS
 	g.dnsGw.ServeConn(conn)
 }
 
-func (g *Gateway) policyDNS(conid uint16, domain ...string) (key string) {
-	key, _, _ = g.Policy("dns", nil, 0, domain[0], "")
+func (g *Gateway) policyDNS(conid uint16, questions []string) (key string) {
+	key, _, _ = g.Policy("dns", nil, 0, "", "", questions)
 	return
 }
 
@@ -352,13 +353,14 @@ func (g *Gateway) procUDP() {
 		g.waiter.Done()
 	}()
 	g.udpGw = udpgw.NewForwarder(g.Dialer, g.BufferSize)
+	g.udpGw.Cache = g.dnsCache
 	g.udpGw.Policy = g.policyUDP
 	g.udpGw.ServeConn(conn)
 }
 
-func (g *Gateway) policyUDP(id uint16, ip net.IP, port uint16) (uri string, newIP net.IP, newPort uint16) {
+func (g *Gateway) policyUDP(id uint16, ip net.IP, port uint16, questions []string) (uri string, newIP net.IP, newPort uint16) {
 	domain, cname, _ := g.dnsCache.Reflect(ip.String())
-	uri, newIP, newPort = g.Policy("udp", ip, port, domain, cname)
+	uri, newIP, newPort = g.Policy("udp", ip, port, domain, cname, questions)
 	return
 }
 
@@ -389,7 +391,7 @@ func (g *Gateway) procTCP() {
 
 func (g *Gateway) policyTCP(ip net.IP, port uint16) (uri string) {
 	domain, cname, _ := g.dnsCache.Reflect(ip.String())
-	uri, _, _ = g.Policy("tcp", ip, port, domain, cname)
+	uri, _, _ = g.Policy("tcp", ip, port, domain, cname, nil)
 	return
 }
 

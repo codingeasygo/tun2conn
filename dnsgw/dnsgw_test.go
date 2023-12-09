@@ -161,7 +161,8 @@ func TestForwarder(t *testing.T) {
 			return
 		})
 		forwarder := NewForwarder(dialer, 2048)
-		forwarder.Policy = func(conid uint16, domain ...string) string { return "*" }
+		forwarder.Cache = NewCache()
+		forwarder.Policy = func(conid uint16, questions []string) string { return "*" }
 		go forwarder.ServeConn(conn)
 
 		text, err := exec.Command("bash", "-c", "dig example.com @127.0.0.1 -p 10453").CombinedOutput()
