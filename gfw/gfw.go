@@ -103,7 +103,13 @@ func ReadGfwlist(gfwFile string) (rules []string, err error) {
 	if err != nil {
 		return
 	}
-	gfwData, err := base64.StdEncoding.DecodeString(string(gfwRaw))
+	rules, err = DecodeGfwlist(string(gfwRaw))
+	return
+}
+
+// DecodeGfwlist will read and decode gfwlist file
+func DecodeGfwlist(gfwRaw string) (rules []string, err error) {
+	gfwData, err := base64.StdEncoding.DecodeString(gfwRaw)
 	if err != nil {
 		err = fmt.Errorf("decode gfwlist.txt fail with %v", err)
 		return
@@ -124,7 +130,12 @@ func ReadUserRules(gfwFile string) (rules []string, err error) {
 	if err != nil {
 		return
 	}
-	gfwRulesAll := strings.Split(string(gfwData), "\n")
+	rules = DecodeUserRules(string(gfwData))
+	return
+}
+
+func DecodeUserRules(gfwData string) (rules []string) {
+	gfwRulesAll := strings.Split(gfwData, "\n")
 	for _, rule := range gfwRulesAll {
 		rule = strings.TrimSpace(rule)
 		if strings.HasPrefix(rule, "--") || strings.HasPrefix(rule, "!") || len(strings.TrimSpace(rule)) < 1 {
@@ -140,6 +151,14 @@ func ReadAllRules(gfwFile, userFile string) (rules []string, err error) {
 	if err == nil {
 		userRules, _ := ReadUserRules(userFile)
 		rules = append(rules, userRules...)
+	}
+	return
+}
+
+func DecodeAllRules(gfwData, userData string) (rules []string, err error) {
+	rules, err = DecodeGfwlist(gfwData)
+	if err == nil {
+		rules = append(rules, DecodeUserRules(userData)...)
 	}
 	return
 }

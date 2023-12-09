@@ -110,5 +110,7 @@ testproxy
 	ReadGfwlist("none.txt")
 	ReadUserRules("none.txt")
 
+	DecodeAllRules("", "")
+
 	CreateAbpJS(rules, "127.0.0.1:1000")
 }
