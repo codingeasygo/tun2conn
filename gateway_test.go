@@ -18,6 +18,7 @@ import (
 	"github.com/codingeasygo/util/xio/frame"
 	"github.com/songgao/water"
 	"golang.org/x/net/dns/dnsmessage"
+	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
@@ -50,6 +51,41 @@ type forwardPiper struct {
 
 func (f *forwardPiper) PipeConn(conn io.ReadWriteCloser, target string) (err error) {
 	err = f.Piper.PipeConn(frame.NewRawReadWriteCloser(frame.NewDefaultHeader(), conn, 2048), target)
+	return
+}
+
+type packetReader struct {
+	bufffer chan []byte
+}
+
+func newPacketReader() (reader *packetReader) {
+	reader = &packetReader{
+		bufffer: make(chan []byte, 1),
+	}
+	return
+}
+
+func (p *packetReader) ReadPacket() (pkt *stack.PacketBuffer, err error) {
+	data := <-p.bufffer
+	if len(data) < 1 {
+		err = fmt.Errorf("closed")
+		return
+	}
+	pkt = stack.NewPacketBuffer(stack.PacketBufferOptions{
+		Payload: buffer.MakeWithData(data),
+	})
+	return
+}
+
+func (p *packetReader) Read(b []byte) (n int, err error) {
+	return
+}
+
+func (p *packetReader) Write(b []byte) (n int, err error) {
+	return
+}
+
+func (p *packetReader) Close() (err error) {
 	return
 }
 
@@ -263,19 +299,27 @@ func TestGateway(t *testing.T) {
 	}
 	gw6.Stop()
 
+	//packet
+	pr := newPacketReader()
+	gw.Device = pr
+	gw.waiter.Add(1)
+	go gw.procDevice()
+	pr.bufffer <- []byte("abc")
+	pr.bufffer <- nil
+
 	//cover
-	gw.link.ARPHardwareType()
-	gw.link.IsAttached()
-	gw.link.Wait()
-	gw.link.ParseHeader(nil)
-	gw.link.AddHeader(nil)
-	gw.link.Recv(nil)
-	gw.link.Recv([]byte{1})
-	gw.link.Recv([]byte{6 << 4})
+	gw.Link.ARPHardwareType()
+	gw.Link.IsAttached()
+	gw.Link.Wait()
+	gw.Link.ParseHeader(nil)
+	gw.Link.AddHeader(nil)
+	gw.Link.RecvBuffer(nil)
+	gw.Link.RecvBuffer([]byte{1})
+	gw.Link.RecvBuffer([]byte{6 << 4})
 	pkts := stack.PacketBufferList{}
 	pkts.PushBack(stack.NewPacketBuffer(stack.PacketBufferOptions{}))
-	gw.link.send = func(b []byte) tcpip.Error { return &tcpip.ErrAborted{} }
-	gw.link.WritePackets(pkts)
+	gw.Link.send = func(b []byte) tcpip.Error { return &tcpip.ErrAborted{} }
+	gw.Link.WritePackets(pkts)
 
 	gw.udpConn.WriteTo([]byte(""), nil, nil)
 
@@ -314,7 +358,7 @@ func TestGateway(t *testing.T) {
 	}
 
 	gw2 := NewGateway(device, "10.1.1.1/24", "10.1.1.1")
-	gw2.Stack.CreateNIC(1, gw.link)
+	gw2.Stack.CreateNIC(1, gw.Link)
 	if gw2.Start() == nil {
 		t.Error("error")
 	}
@@ -325,8 +369,8 @@ func TestGateway(t *testing.T) {
 	//bind error
 	maddr, _ := net.ParseMAC("aa:00:01:01:01:01")
 	gw3 := NewGateway(device, "10.1.1.1/24", "10.1.1.1")
-	gw3.link = NewLinkEndpoint(uint32(gw3.MTU), tcpip.LinkAddress(maddr), gw3.writeDevice)
-	if xerr := gw3.Stack.CreateNIC(2, gw3.link); xerr != nil {
+	gw3.Link = NewLinkEndpoint(uint32(gw3.MTU), tcpip.LinkAddress(maddr), gw3.writeDevice)
+	if xerr := gw3.Stack.CreateNIC(2, gw3.Link); xerr != nil {
 		t.Error(err)
 		return
 
@@ -364,7 +408,7 @@ func TestGateway(t *testing.T) {
 	gw4.Stop()
 
 	//
-	gw.device = &errWriter{}
+	gw.Device = &errWriter{}
 	gw.writeDevice([]byte("error"))
 
 	//panic
@@ -403,7 +447,7 @@ func TestGatewayByListen(t *testing.T) {
 	}
 	gw.Stop()
 
-	device := gw.device.(*PacketConnDevice)
+	device := gw.Device.(*PacketConnDevice)
 	device.Write(nil)
 	device.fromAddr = &net.TCPAddr{}
 	device.Write(nil)

@@ -12,6 +12,10 @@ import (
 	"gvisor.dev/gvisor/pkg/tcpip/stack"
 )
 
+type PacketReader interface {
+	ReadPacket() (pkt *stack.PacketBuffer, err error)
+}
+
 type LinkEndpoint struct {
 	mtu        uint32
 	addr       tcpip.LinkAddress
@@ -98,13 +102,17 @@ func (e *LinkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Err
 	return sentPackets, nil
 }
 
-func (e *LinkEndpoint) Recv(p []byte) {
+func (e *LinkEndpoint) RecvBuffer(p []byte) {
 	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		Payload: buffer.MakeWithData(p),
 	})
+	e.RecvPacket(pkt)
+}
+
+func (e *LinkEndpoint) RecvPacket(pkt *stack.PacketBuffer) {
 	h, ok := pkt.Data().PullUp(1)
 	if !ok {
-		log.WarnLog("LinkEndpoint recv nvalid packet: %02x", p)
+		log.WarnLog("LinkEndpoint recv nvalid packet: %02x", pkt.AsSlices())
 		return
 	}
 	dispatcher := e.dispatcher
@@ -115,7 +123,7 @@ func (e *LinkEndpoint) Recv(p []byte) {
 		case header.IPv6Version:
 			dispatcher.DeliverNetworkPacket(header.IPv6ProtocolNumber, pkt)
 		default:
-			log.WarnLog("LinkEndpoint recv nvalid packet: %02x", p)
+			log.WarnLog("LinkEndpoint recv nvalid packet: %02x", pkt.AsSlices())
 		}
 	}
 	pkt.DecRef()

@@ -47,11 +47,11 @@ type Gateway struct {
 	Channel    func(on string, ip net.IP, port uint16, domain, cname string, questions []string) string
 	Dialer     xio.PiperDialer
 	BufferSize int
+	Device     io.ReadWriteCloser
+	Link       *LinkEndpoint
 	Stack      *stack.Stack
 	GFW        *gfw.GFW
 	Mode       ProxyMode
-	device     io.ReadWriteCloser
-	link       *LinkEndpoint
 	proto      tcpip.NetworkProtocolNumber
 	dnsCache   *dnsgw.Cache
 	dnsAddr    tcpip.FullAddress
@@ -74,7 +74,7 @@ func NewGateway(device io.ReadWriteCloser, addr, dns string) (gateway *Gateway) 
 		GFW:        gfw.NewGFW(),
 		Channel:    func(on string, ip net.IP, port uint16, domain, cname string, questions []string) string { return ".*" },
 		Mode:       ProxyAutoMode,
-		device:     device,
+		Device:     device,
 		dnsCache:   dnsgw.NewCache(),
 		waiter:     sync.WaitGroup{},
 	}
@@ -195,8 +195,8 @@ func (g *Gateway) Start() (err error) {
 		}
 	}
 
-	g.link = NewLinkEndpoint(uint32(g.MTU), tcpip.LinkAddress(maddr), g.writeDevice)
-	if xerr := g.Stack.CreateNIC(1, g.link); xerr != nil {
+	g.Link = NewLinkEndpoint(uint32(g.MTU), tcpip.LinkAddress(maddr), g.writeDevice)
+	if xerr := g.Stack.CreateNIC(1, g.Link); xerr != nil {
 		err = fmt.Errorf("CreateNIC error %v", xerr)
 		return
 	}
@@ -244,8 +244,8 @@ func (g *Gateway) Stop() (err error) {
 	g.stopDNS()
 	g.stopUDP()
 	g.stopTCP()
-	if g.link != nil {
-		g.link.Close()
+	if g.Link != nil {
+		g.Link.Close()
 	}
 	if g.Stack != nil {
 		g.Stack.Close()
@@ -261,32 +261,43 @@ func (g *Gateway) startDevice() {
 }
 
 func (g *Gateway) stopDevice() {
-	if g.device != nil {
-		g.device.Close()
+	if g.Device != nil {
+		g.Device.Close()
 	}
 }
 
 func (g *Gateway) procDevice() {
 	defer func() {
-		g.device.Close()
+		g.Device.Close()
 		g.waiter.Done()
 	}()
-	log.InfoLog("Gateway read device(%v) is started", g.device)
-	buffer := make([]byte, g.MTU)
-	for {
-		n, err := g.device.Read(buffer)
-		if err != nil {
-			log.InfoLog("Gateway read device(%v) is done by %v", g.device, err)
-			break
+	log.InfoLog("Gateway read device(%v) is started", g.Device)
+	if reader, ok := g.Device.(PacketReader); ok {
+		for {
+			pkt, err := reader.ReadPacket()
+			if err != nil {
+				log.InfoLog("Gateway read device(%v) is done by %v", g.Device, err)
+				break
+			}
+			g.Link.RecvPacket(pkt)
 		}
-		g.link.Recv(buffer[:n])
+	} else {
+		buffer := make([]byte, g.MTU)
+		for {
+			n, err := g.Device.Read(buffer)
+			if err != nil {
+				log.InfoLog("Gateway read device(%v) is done by %v", g.Device, err)
+				break
+			}
+			g.Link.RecvBuffer(buffer[:n])
+		}
 	}
 }
 
 func (g *Gateway) writeDevice(p []byte) (_ tcpip.Error) {
-	_, err := g.device.Write(p)
+	_, err := g.Device.Write(p)
 	if err != nil {
-		log.WarnLog("Gateway write device(%v) error %v", g.device, err)
+		log.WarnLog("Gateway write device(%v) error %v", g.Device, err)
 	}
 	return
 }
