@@ -555,8 +555,8 @@ func (g *gwConnTCP) Write(p []byte) (n int, err error) {
 }
 
 func (g *gwConnTCP) Close() (err error) {
-	g.wq.EventUnregister(&g.wait)
 	g.ep.Close()
+	g.wq.EventUnregister(&g.wait)
 	return
 }
 
