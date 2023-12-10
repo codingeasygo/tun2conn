@@ -3,3 +3,6 @@
 coverage.html
 coverage.json
 tun2socks/tun2socks
+.DS_Store
+dnsgw/resolver/resolver.exe
+dnsgw/resolver/resolver

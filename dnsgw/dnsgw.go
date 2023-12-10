@@ -31,27 +31,14 @@ func (r *Resolver) Query(ctx context.Context, request []byte) (response []byte, 
 			Response:      true,
 			Authoritative: true,
 		},
+		Questions: questions,
 	}
 	found := false
 	for _, question := range questions {
 		switch question.Type {
-		case dnsmessage.TypeCNAME:
-			cname, _ := (*net.Resolver)(r).LookupCNAME(ctx, question.Name.String())
-			if len(cname) > 0 {
-				message.Answers = append(message.Answers, dnsmessage.Resource{
-					Header: dnsmessage.ResourceHeader{
-						Name:  question.Name,
-						Type:  question.Type,
-						Class: question.Class,
-					},
-					Body: &dnsmessage.CNAMEResource{
-						CNAME: dnsmessage.MustNewName(cname),
-					},
-				})
-				found = true
-			}
 		case dnsmessage.TypeA:
 			ip, _ := (*net.Resolver)(r).LookupIP(ctx, "ip4", strings.TrimSuffix(question.Name.String(), "."))
+			// fmt.Printf("look A %v=>%v\n", question.Name.String(), err)
 			if len(ip) > 0 {
 				message.Answers = append(message.Answers, dnsmessage.Resource{
 					Header: dnsmessage.ResourceHeader{
@@ -65,8 +52,94 @@ func (r *Resolver) Query(ctx context.Context, request []byte) (response []byte, 
 				})
 				found = true
 			}
+		case dnsmessage.TypeNS:
+			ns, _ := (*net.Resolver)(r).LookupNS(ctx, strings.TrimSuffix(question.Name.String(), "."))
+			// fmt.Printf("look NS %v=>%v\n", question.Name.String(), err)
+			if len(ns) > 0 {
+				message.Answers = append(message.Answers, dnsmessage.Resource{
+					Header: dnsmessage.ResourceHeader{
+						Name:  question.Name,
+						Type:  question.Type,
+						Class: question.Class,
+					},
+					Body: &dnsmessage.NSResource{
+						NS: dnsmessage.MustNewName(ns[0].Host),
+					},
+				})
+				found = true
+			}
+		case dnsmessage.TypeCNAME:
+			cname, _ := (*net.Resolver)(r).LookupCNAME(ctx, strings.TrimSuffix(question.Name.String(), "."))
+			// fmt.Printf("look CNAME %v=>%v\n", question.Name.String(), err)
+			if len(cname) > 0 {
+				message.Answers = append(message.Answers, dnsmessage.Resource{
+					Header: dnsmessage.ResourceHeader{
+						Name:  question.Name,
+						Type:  question.Type,
+						Class: question.Class,
+					},
+					Body: &dnsmessage.CNAMEResource{
+						CNAME: dnsmessage.MustNewName(cname),
+					},
+				})
+				found = true
+			}
+		case dnsmessage.TypeSOA, dnsmessage.TypePTR:
+			message.Authorities = append(message.Answers, dnsmessage.Resource{
+				Header: dnsmessage.ResourceHeader{
+					Name:  question.Name,
+					Type:  question.Type,
+					Class: question.Class,
+					TTL:   5,
+				},
+				Body: &dnsmessage.SOAResource{
+					NS:      dnsmessage.MustNewName("local."),
+					MBox:    dnsmessage.MustNewName("dns.local."),
+					Serial:  2022120201,
+					Refresh: 10800,
+					Retry:   3600,
+					Expire:  604800,
+					MinTTL:  86400,
+				},
+			})
+			found = true
+		case dnsmessage.TypeMX:
+			mx, _ := (*net.Resolver)(r).LookupMX(ctx, strings.TrimSuffix(question.Name.String(), "."))
+			// fmt.Printf("look MX %v=>%v\n", question.Name.String(), err)
+			if len(mx) > 0 {
+				message.Answers = append(message.Answers, dnsmessage.Resource{
+					Header: dnsmessage.ResourceHeader{
+						Name:  question.Name,
+						Type:  question.Type,
+						Class: question.Class,
+					},
+					Body: &dnsmessage.MXResource{
+						Pref: mx[0].Pref,
+						MX:   dnsmessage.MustNewName(mx[0].Host),
+					},
+				})
+				found = true
+			}
+		case dnsmessage.TypeTXT:
+			txt, _ := (*net.Resolver)(r).LookupTXT(ctx, strings.TrimSuffix(question.Name.String(), "."))
+			// fmt.Printf("look TXT %v=>%v\n", question.Name.String(), err)
+			if len(txt) > 0 {
+				message.Answers = append(message.Answers, dnsmessage.Resource{
+					Header: dnsmessage.ResourceHeader{
+						Name:  question.Name,
+						Type:  question.Type,
+						Class: question.Class,
+					},
+					Body: &dnsmessage.TXTResource{
+						TXT: txt,
+					},
+				})
+				found = true
+			}
+
 		case dnsmessage.TypeAAAA:
 			ip, _ := (*net.Resolver)(r).LookupIP(ctx, "ip6", strings.TrimSuffix(question.Name.String(), "."))
+			// fmt.Printf("look AAAA %v=>%v\n", question.Name.String(), err)
 			if len(ip) > 0 {
 				message.Answers = append(message.Answers, dnsmessage.Resource{
 					Header: dnsmessage.ResourceHeader{
@@ -80,6 +153,27 @@ func (r *Resolver) Query(ctx context.Context, request []byte) (response []byte, 
 				})
 				found = true
 			}
+		case dnsmessage.Type(64), dnsmessage.Type(65):
+			message.Authorities = append(message.Answers, dnsmessage.Resource{
+				Header: dnsmessage.ResourceHeader{
+					Name:  question.Name,
+					Type:  question.Type,
+					Class: question.Class,
+					TTL:   5,
+				},
+				Body: &dnsmessage.SOAResource{
+					NS:      dnsmessage.MustNewName(question.Name.String()),
+					MBox:    dnsmessage.MustNewName(question.Name.String()),
+					Serial:  2022120201,
+					Refresh: 10800,
+					Retry:   3600,
+					Expire:  604800,
+					MinTTL:  86400,
+				},
+			})
+			found = true
+		default:
+			log.WarnLog("Query not supporeted question %v", question)
 		}
 	}
 	if !found {

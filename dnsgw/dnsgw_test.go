@@ -8,6 +8,7 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,35 +22,61 @@ func init() {
 }
 
 func TestResolver(t *testing.T) {
-	resolver := &Resolver{}
-	{
-		request := []byte{58, 73, 1, 32, 0, 1, 0, 0, 0, 0, 0, 1, 5, 98, 97, 105, 100, 117, 3, 99, 111, 109, 0, 0, 1, 0, 1, 0, 0, 41, 16, 0, 0, 0, 0, 0, 0, 0}
-		response, err := resolver.Query(context.Background(), request)
-		fmt.Println("-->", response, err)
+	ln, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Error(err)
+		return
 	}
+	port := ln.LocalAddr().(*net.UDPAddr).Port
+
+	resolver := &Resolver{}
+	go func() {
+		buffer := make([]byte, 2048)
+		for {
+			n, from, err := ln.ReadFrom(buffer)
+			if err != nil {
+				break
+			}
+			response, err := resolver.Query(context.Background(), buffer[0:n])
+			fmt.Println("Query--->", err)
+			if len(response) > 0 {
+				ln.WriteTo(response, from)
+			}
+		}
+	}()
+	time.Sleep(100 * time.Millisecond)
+
+	for _, x := range strings.Split("A,NS,CNAME,MX,TXT,AAAA,-t TYPE64,-t TYPE65", ",") {
+		_, err = exec.Command("bash", "-c", fmt.Sprintf("dig %v example.com @127.0.0.1 -p %v", x, port)).CombinedOutput()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+	}
+
+	for _, x := range strings.Split("SOA,PTR", ",") {
+		_, err = exec.Command("bash", "-c", fmt.Sprintf("dig %v 183.2.172.42 @127.0.0.1 -p %v", x, port)).CombinedOutput()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+	}
+
+	ln.Close()
+
 	{
 		req := &dnsmessage.Message{
 			Questions: []dnsmessage.Question{
 				{
 					Name:  dnsmessage.MustNewName("example.com."),
-					Type:  dnsmessage.TypeCNAME,
-					Class: dnsmessage.ClassINET,
-				},
-				{
-					Name:  dnsmessage.MustNewName("example.com."),
-					Type:  dnsmessage.TypeA,
-					Class: dnsmessage.ClassINET,
-				},
-				{
-					Name:  dnsmessage.MustNewName("example.com."),
-					Type:  dnsmessage.TypeAAAA,
+					Type:  dnsmessage.TypeSRV,
 					Class: dnsmessage.ClassINET,
 				},
 			},
 		}
 		request, _ := req.Pack()
 		_, err := resolver.Query(context.Background(), request)
-		if err != nil {
+		if err == nil {
 			t.Error(err)
 			return
 		}
