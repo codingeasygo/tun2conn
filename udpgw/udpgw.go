@@ -339,7 +339,7 @@ func (u *Gateway) procRead(conn *gwConn, offset int, write func([]byte) (int, er
 func (u *Gateway) limitConn() {
 	u.connLock.Lock()
 	defer u.connLock.Unlock()
-	if len(u.connList) < u.MaxConn {
+	if u.MaxConn < 1 || len(u.connList) < u.MaxConn {
 		return
 	}
 	var oldest *gwConn
