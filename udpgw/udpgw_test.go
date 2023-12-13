@@ -113,17 +113,13 @@ func TestGateway(t *testing.T) {
 	xhttp.GetText("%v", ts.URL)
 	//timeout
 	StartTimeout(time.Millisecond, 10*time.Millisecond)
-	func() {
-		defer func() {
-			recover()
-		}()
-		StartTimeout(time.Millisecond, 10*time.Millisecond)
-	}()
+	StartTimeout(time.Millisecond, 10*time.Millisecond)
 	time.Sleep(100 * time.Millisecond)
 	if len(gw.connList) > 0 {
 		t.Error("error")
 		return
 	}
+	StopTimeout()
 	StopTimeout()
 
 	//dns

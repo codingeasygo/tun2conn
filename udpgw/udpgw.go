@@ -32,14 +32,21 @@ var timeoutExit = make(chan int, 1)
 var timeoutWait = make(chan int, 1)
 
 func StartTimeout(delay, timeout time.Duration) {
+	allGatewayLock.Lock()
+	defer allGatewayLock.Unlock()
 	if allGatewayRunning {
-		panic("running")
+		return
 	}
 	allGatewayRunning = true
 	go runTimeout(delay, timeout)
 }
 
 func StopTimeout() {
+	allGatewayLock.Lock()
+	defer allGatewayLock.Unlock()
+	if !allGatewayRunning {
+		return
+	}
 	timeoutExit <- 1
 	<-timeoutWait
 	allGatewayRunning = false
