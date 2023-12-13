@@ -52,6 +52,12 @@ func (g *GFW) Set(list, target string) {
 	g.list[list] = target
 }
 
+func (g *GFW) Clear() {
+	g.lck.Lock()
+	defer g.lck.Unlock()
+	g.list = map[string]string{}
+}
+
 // IsProxy return true, if domain target is dns://proxy
 func (g *GFW) IsProxy(domain string) bool {
 	return g.Find(domain) == GfwProxy
@@ -151,25 +157,6 @@ func DecodeUserRules(gfwData string) (rules []string) {
 	return
 }
 
-func LoadAllRules(dir string) (rules []string, err error) {
-	rules, err = ReadGfwlist(filepath.Join(dir, "gfwlist.txt"))
-	if os.IsNotExist(err) {
-		rules, err = DecodeGfwlist(GfwlistDefault)
-	}
-	if err != nil {
-		return
-	}
-	userRules, err := ReadUserRules(filepath.Join(dir, "user_rules.txt"))
-	if os.IsNotExist(err) {
-		err = nil
-	}
-	if err != nil {
-		return
-	}
-	rules = append(rules, userRules...)
-	return
-}
-
 func ReadAllRules(gfwFile, userFile string) (rules []string, err error) {
 	rules, err = ReadGfwlist(gfwFile)
 	if err == nil {
@@ -187,31 +174,109 @@ func DecodeAllRules(gfwData, userData string) (rules []string, err error) {
 	return
 }
 
-func LoadGFW(dir string) (gfw *GFW, err error) {
-	rules, err := LoadAllRules(dir)
-	if err == nil {
-		gfw = NewGFW()
-		gfw.Set(strings.Join(rules, "\n"), GfwProxy)
-	}
-	return
-}
-
-func UpdateGfwlist(dir string) (err error) {
-	filename := filepath.Join(dir, "gfwlist.txt")
-	downname := filepath.Join(dir, "gfwlist.down")
-	_, err = xhttp.Download(downname, GfwlistSource)
-	if err == nil {
-		os.Remove(filename)
-		err = os.Rename(downname, filename)
-	}
-	return
-}
-
 func CreateAbpJS(gfwRules []string, proxyAddr string) (js string) {
 	gfwRulesJS, _ := json.Marshal(gfwRules)
 	parts := strings.Split(proxyAddr, ":")
 	js = strings.Replace(ABP_JS, "__RULES__", string(gfwRulesJS), 1)
 	js = strings.Replace(js, "__SOCKS5ADDR__", strings.Join(parts[:len(parts)-1], ":"), -1)
 	js = strings.Replace(js, "__SOCKS5PORT__", parts[len(parts)-1], -1)
+	return
+}
+
+type Cache struct {
+	Dir       string
+	Gfwlist   string
+	UserRules string
+	gfw       *GFW
+}
+
+func NewCache(dir string) (cache *Cache) {
+	cache = &Cache{
+		Dir:       dir,
+		Gfwlist:   "gfwlist.txt",
+		UserRules: "user_rules.txt",
+	}
+	return
+}
+
+func (c *Cache) Reset() (err error) {
+	rules, err := c.LoadAllRules()
+	if err != nil {
+		return
+	}
+	if c.gfw == nil {
+		c.gfw = NewGFW()
+	}
+	c.gfw.Clear()
+	c.gfw.Set(strings.Join(rules, "\n"), GfwProxy)
+	return
+}
+
+func (c *Cache) LoadAllRules() (rules []string, err error) {
+	if len(c.Gfwlist) > 0 {
+		var gfwRules []string
+		if strings.HasSuffix(c.Gfwlist, ".txt") {
+			gfwRules, err = ReadGfwlist(filepath.Join(c.Dir, c.Gfwlist))
+		} else {
+			gfwRules, err = DecodeGfwlist(c.Gfwlist)
+		}
+		if os.IsNotExist(err) {
+			rules, err = DecodeGfwlist(GfwlistDefault)
+		}
+		if err != nil {
+			return
+		}
+		rules = append(rules, gfwRules...)
+	}
+	if len(c.UserRules) > 0 {
+		var userRules []string
+		if strings.HasSuffix(c.UserRules, ".txt") {
+			userRules, err = ReadUserRules(filepath.Join(c.Dir, c.UserRules))
+		} else {
+			userRules = DecodeUserRules(c.Gfwlist)
+		}
+		if os.IsNotExist(err) {
+			err = nil
+		}
+		if err != nil {
+			return
+		}
+		rules = append(rules, userRules...)
+	}
+	return
+}
+
+func (c *Cache) Update(client *xhttp.Client, source string) (err error) {
+	if len(source) < 1 {
+		source = GfwlistSource
+	}
+	gfwRules, err := client.GetBytes("%v", source)
+	if err != nil {
+		return
+	}
+	if strings.HasSuffix(c.Gfwlist, ".txt") {
+		err = os.WriteFile(filepath.Join(c.Dir, c.Gfwlist), gfwRules, os.ModePerm)
+	} else {
+		c.Gfwlist = string(gfwRules)
+	}
+	if err == nil {
+		c.Reset()
+	}
+	return
+}
+
+func (c *Cache) LoadGFW() (gfw *GFW, err error) {
+	if gfw == nil {
+		err = c.Reset()
+	}
+	gfw = c.gfw
+	return
+}
+
+func (c *Cache) CreateAbpJS(proxyAddr string) (js string, err error) {
+	rules, err := c.LoadAllRules()
+	if err == nil {
+		js = CreateAbpJS(rules, proxyAddr)
+	}
 	return
 }

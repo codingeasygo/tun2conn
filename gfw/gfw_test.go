@@ -5,7 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
+
+	"github.com/codingeasygo/util/xhttp"
 )
 
 func TestGFW(t *testing.T) {
@@ -23,7 +26,7 @@ testproxy
 		t.Error("not proxy")
 		return
 	}
-	if !gfw.IsProxy("google.com") {
+	if !gfw.IsProxy("google.com") || !gfw.IsProxy("www.google.com.hk") {
 		t.Error("not proxy")
 		return
 	}
@@ -109,45 +112,69 @@ testproxy
 	}
 	fmt.Printf("info:%v\n", gfw)
 
-	_, err = LoadGFW(".")
+	cache := NewCache(".")
+	_, err = cache.LoadGFW()
 	if err != nil {
 		t.Error(err)
 		return
 	}
-	_, err = LoadGFW("none")
-	if err != nil {
-		t.Error(err)
-		return
-	}
-	os.Remove("access")
-	os.Mkdir("access", os.ModePerm)
-	os.WriteFile("access/user_rules.txt", []byte("xxx"), 0100)
-	_, err = LoadGFW("access")
-	if err == nil {
-		t.Error(err)
-		return
-	}
-	os.WriteFile("access/gfwlist.txt", []byte("xxx"), 0100)
-	_, err = LoadGFW("access")
-	if err == nil {
-		t.Error(err)
-		return
-	}
-	os.RemoveAll("access")
-
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/gfwlist.txt" {
-			fmt.Fprintf(w, "%v", GfwlistDefault)
+			fmt.Fprintf(w, "%v", strings.TrimPrefix(GfwlistDefault, "\n"))
 		} else {
 			w.WriteHeader(404)
 		}
 	}))
 	GfwlistSource = ts.URL + "/gfwlist.txt"
-	err = UpdateGfwlist("/tmp/")
+	err = cache.Update(xhttp.Shared, "")
 	if err != nil {
 		t.Error(err)
 		return
 	}
+	err = cache.Update(xhttp.Shared, "xxxx")
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	cache.Gfwlist = GfwlistDefault
+	cache.UserRules = "test.loc"
+	err = cache.Update(xhttp.Shared, "")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	js, err := cache.CreateAbpJS("127.0.0.1:1000")
+	if err != nil || len(js) < 1 {
+		t.Error(err)
+		return
+	}
+
+	cache2 := NewCache("none")
+	_, err = cache2.LoadGFW()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+
+	cache3 := NewCache("access")
+	os.Remove("access")
+	os.Mkdir("access", os.ModePerm)
+	os.WriteFile("access/user_rules.txt", []byte("xxx"), 0100)
+	cache3.gfw = nil
+	_, err = cache3.LoadGFW()
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	os.WriteFile("access/gfwlist.txt", []byte("xxx"), 0100)
+	cache3.gfw = nil
+	_, err = cache3.LoadGFW()
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	os.RemoveAll("access")
 
 	ReadGfwlist("abp.go")
 	ReadGfwlist("none.txt")
