@@ -3,6 +3,7 @@ package dnsgw
 import (
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -61,17 +62,23 @@ func (c *Cache) Add(response []byte) {
 		switch answer.Header.Type {
 		case dnsmessage.TypeCNAME:
 			body := answer.Body.(*dnsmessage.CNAMEResource)
-			c.CN[body.CNAME.String()] = answer.Header.Name.String()
+			domain := strings.TrimSuffix(answer.Header.Name.String(), ".")
+			c.CN[body.CNAME.String()] = domain
+			log.DebugLog("Cache add CNAME record by %v=>%v", body.CNAME, domain)
 		case dnsmessage.TypeA:
 			body := answer.Body.(*dnsmessage.AResource)
 			key := net.IP(body.A[:]).String()
-			c.IP[key] = answer.Header.Name.String()
+			domain := strings.TrimSuffix(answer.Header.Name.String(), ".")
+			c.IP[key] = domain
 			c.Time[key] = now
+			log.DebugLog("Cache add A record by %v=>%v", key, domain)
 		case dnsmessage.TypeAAAA:
 			body := answer.Body.(*dnsmessage.AAAAResource)
 			key := net.IP(body.AAAA[:]).String()
-			c.IP[key] = answer.Header.Name.String()
+			domain := strings.TrimSuffix(answer.Header.Name.String(), ".")
+			c.IP[key] = domain
 			c.Time[key] = now
+			log.DebugLog("Cache add AAAA record by %v=>%v", key, domain)
 		}
 		c.Update = now
 	}
