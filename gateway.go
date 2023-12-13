@@ -111,7 +111,7 @@ func (g *Gateway) PolicyGFW(on string, ip net.IP, port uint16, domain, cname str
 	case ProxyAutoMode:
 		switch on {
 		case "dns":
-			proxy = len(domain) > 0 && g.GFW.IsProxy(domain)
+			proxy = len(questions) > 0 && g.GFW.IsProxy(questions[0])
 		default:
 			proxy = (len(cname) > 0 && g.GFW.IsProxy(cname)) || (len(domain) > 0 && g.GFW.IsProxy(domain)) || (len(ip) > 0 && g.GFW.IsProxy(ip.String()))
 		}
