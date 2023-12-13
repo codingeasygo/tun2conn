@@ -151,6 +151,25 @@ func DecodeUserRules(gfwData string) (rules []string) {
 	return
 }
 
+func LoadAllRules(dir string) (rules []string, err error) {
+	rules, err = ReadGfwlist(filepath.Join(dir, "gfwlist.txt"))
+	if os.IsNotExist(err) {
+		rules, err = DecodeGfwlist(GfwlistDefault)
+	}
+	if err != nil {
+		return
+	}
+	userRules, err := ReadUserRules(filepath.Join(dir, "user_rules.txt"))
+	if os.IsNotExist(err) {
+		err = nil
+	}
+	if err != nil {
+		return
+	}
+	rules = append(rules, userRules...)
+	return
+}
+
 func ReadAllRules(gfwFile, userFile string) (rules []string, err error) {
 	rules, err = ReadGfwlist(gfwFile)
 	if err == nil {
@@ -169,23 +188,11 @@ func DecodeAllRules(gfwData, userData string) (rules []string, err error) {
 }
 
 func LoadGFW(dir string) (gfw *GFW, err error) {
-	rules, err := ReadGfwlist(filepath.Join(dir, "gfwlist.txt"))
-	if os.IsNotExist(err) {
-		rules, err = DecodeGfwlist(GfwlistDefault)
+	rules, err := LoadAllRules(dir)
+	if err == nil {
+		gfw = NewGFW()
+		gfw.Set(strings.Join(rules, "\n"), GfwProxy)
 	}
-	if err != nil {
-		return
-	}
-	userRules, err := ReadUserRules(filepath.Join(dir, "user_rules.txt"))
-	if os.IsNotExist(err) {
-		err = nil
-	}
-	if err != nil {
-		return
-	}
-	rules = append(rules, userRules...)
-	gfw = NewGFW()
-	gfw.Set(strings.Join(rules, "\n"), GfwProxy)
 	return
 }
 
