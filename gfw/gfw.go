@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+
+	"github.com/codingeasygo/util/xhttp"
 )
 
 const (
@@ -16,6 +19,8 @@ const (
 	//GfwLocal is GFW target for local
 	GfwLocal = "local"
 )
+
+var GfwlistSource = "https://raw.githubusercontent.com/gfwlist/gfwlist/master/gfwlist.txt"
 
 // GFW impl check if domain in gfw list
 type GFW struct {
@@ -159,6 +164,38 @@ func DecodeAllRules(gfwData, userData string) (rules []string, err error) {
 	rules, err = DecodeGfwlist(gfwData)
 	if err == nil {
 		rules = append(rules, DecodeUserRules(userData)...)
+	}
+	return
+}
+
+func LoadGFW(dir string) (gfw *GFW, err error) {
+	rules, err := ReadGfwlist(filepath.Join(dir, "gfwlist.txt"))
+	if os.IsNotExist(err) {
+		rules, err = DecodeGfwlist(GfwlistDefault)
+	}
+	if err != nil {
+		return
+	}
+	userRules, err := ReadUserRules(filepath.Join(dir, "user_rules.txt"))
+	if os.IsNotExist(err) {
+		err = nil
+	}
+	if err != nil {
+		return
+	}
+	rules = append(rules, userRules...)
+	gfw = NewGFW()
+	gfw.Set(strings.Join(rules, "\n"), GfwProxy)
+	return
+}
+
+func UpdateGfwlist(dir string) (err error) {
+	filename := filepath.Join(dir, "gfwlist.txt")
+	downname := filepath.Join(dir, "gfwlist.down")
+	_, err = xhttp.Download(downname, GfwlistSource)
+	if err == nil {
+		os.Remove(filename)
+		err = os.Rename(downname, filename)
 	}
 	return
 }

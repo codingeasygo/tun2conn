@@ -2,6 +2,9 @@ package gfw
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"testing"
 )
 
@@ -105,6 +108,46 @@ testproxy
 		return
 	}
 	fmt.Printf("info:%v\n", gfw)
+
+	_, err = LoadGFW(".")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	_, err = LoadGFW("none")
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	os.Remove("access")
+	os.Mkdir("access", os.ModePerm)
+	os.WriteFile("access/user_rules.txt", []byte("xxx"), 0100)
+	_, err = LoadGFW("access")
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	os.WriteFile("access/gfwlist.txt", []byte("xxx"), 0100)
+	_, err = LoadGFW("access")
+	if err == nil {
+		t.Error(err)
+		return
+	}
+	os.RemoveAll("access")
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/gfwlist.txt" {
+			fmt.Fprintf(w, "%v", GfwlistDefault)
+		} else {
+			w.WriteHeader(404)
+		}
+	}))
+	GfwlistSource = ts.URL + "/gfwlist.txt"
+	err = UpdateGfwlist("/tmp/")
+	if err != nil {
+		t.Error(err)
+		return
+	}
 
 	ReadGfwlist("abp.go")
 	ReadGfwlist("none.txt")
