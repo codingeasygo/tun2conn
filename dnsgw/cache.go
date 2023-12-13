@@ -62,8 +62,9 @@ func (c *Cache) Add(response []byte) {
 		switch answer.Header.Type {
 		case dnsmessage.TypeCNAME:
 			body := answer.Body.(*dnsmessage.CNAMEResource)
+			cname := strings.TrimSuffix(body.CNAME.String(), ".")
 			domain := strings.TrimSuffix(answer.Header.Name.String(), ".")
-			c.CN[body.CNAME.String()] = domain
+			c.CN[cname] = domain
 			log.DebugLog("Cache add CNAME record by %v=>%v", body.CNAME, domain)
 		case dnsmessage.TypeA:
 			body := answer.Body.(*dnsmessage.AResource)

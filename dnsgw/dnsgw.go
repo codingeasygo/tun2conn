@@ -492,7 +492,7 @@ func (f *Forwarder) procData(conn *Conn, buffer []byte) {
 		questions := []string{}
 		qs, _ := parser.AllQuestions()
 		for _, q := range qs {
-			questions = append(questions, q.Name.String())
+			questions = append(questions, strings.TrimSuffix(q.Name.String(), "."))
 		}
 		conid := binary.BigEndian.Uint16(buffer[0:])
 		key = f.Policy(conid, questions)
