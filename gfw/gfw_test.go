@@ -176,6 +176,14 @@ testproxy
 	}
 	os.RemoveAll("access")
 
+	cache4 := NewCache("decode")
+	cache4.Gfwlist = "XXXXX"
+	_, err = cache4.LoadGFW()
+	if err == nil {
+		t.Error(err)
+		return
+	}
+
 	ReadGfwlist("abp.go")
 	ReadGfwlist("none.txt")
 	ReadUserRules("none.txt")
