@@ -425,10 +425,10 @@ func (c *forwarderConn) send(data []byte) {
 }
 
 func (c *forwarderConn) Write(p []byte) (n int, err error) {
-	n, err = c.base.Write(p)
 	if c.owner != nil && c.owner.Cache != nil {
 		c.owner.Cache.Add(p[2:])
 	}
+	n, err = c.base.Write(p)
 	return
 }
 
