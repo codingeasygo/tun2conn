@@ -7,7 +7,7 @@ import (
 )
 
 // LogLevel is log leveo config
-var LogLevel int = 3
+var LogLevel int = 2
 
 // Log is the bsck package default log
 var Log = log.New(os.Stdout, "", log.Ldate|log.Lmicroseconds|log.Lshortfile)
