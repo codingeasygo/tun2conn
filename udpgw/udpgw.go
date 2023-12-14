@@ -358,7 +358,7 @@ func (u *Gateway) limitConn() {
 		}
 	}
 	if oldest != nil {
-		log.DebugLog("Gateway closing connection %v by limit %v/%v", oldest.addr, len(u.connList), u.MaxConn)
+		log.InfoLog("Gateway closing connection %v by limit %v/%v", oldest.addr, len(u.connList), u.MaxConn)
 		oldest.raw.Close()
 		delete(u.connList, oldest.conid)
 	}
