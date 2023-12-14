@@ -196,6 +196,7 @@ type Gateway struct {
 	resolver   *Resolver
 	readBuffer chan []byte //buffer to read
 	queryTask  chan *queryTask
+	exiter     chan int
 	waiter     sync.WaitGroup
 }
 
@@ -207,6 +208,7 @@ func NewGateway(runner int) (gw *Gateway) {
 		resolver:   &Resolver{},
 		readBuffer: make(chan []byte, runner*2),
 		queryTask:  make(chan *queryTask, runner*2),
+		exiter:     make(chan int, runner*2),
 		waiter:     sync.WaitGroup{},
 	}
 	for i := 0; i < runner; i++ {
@@ -222,12 +224,14 @@ func (g *Gateway) String() string {
 
 func (g *Gateway) loopQuery() {
 	defer g.waiter.Done()
-	for {
-		task := <-g.queryTask
-		if task == nil {
-			break
+	running := true
+	for running {
+		select {
+		case task := <-g.queryTask:
+			g.procQuery(task)
+		case <-g.exiter:
+			running = false
 		}
-		g.procQuery(task)
 	}
 }
 
@@ -287,29 +291,26 @@ func (g *Gateway) Write(p []byte) (n int, err error) {
 	request := make([]byte, len(p))
 	copy(request, p)
 	g.recvData(request, g.sendData)
+	n = len(p)
 	return
 }
 
 func (g *Gateway) Read(p []byte) (n int, err error) {
-	data := <-g.readBuffer
-	if len(data) < 1 {
+	select {
+	case data := <-g.readBuffer:
+		n = copy(p, data)
+	case <-g.exiter:
 		err = fmt.Errorf("closed")
-		return
 	}
-	n = copy(p, data)
 	return
 }
 
 func (g *Gateway) Close() (err error) {
-	for i := 0; i < g.runner; i++ {
+	for i := 0; i < g.runner+1; i++ {
 		select {
-		case g.queryTask <- nil:
+		case g.exiter <- 1:
 		default:
 		}
-	}
-	select {
-	case g.readBuffer <- nil:
-	default:
 	}
 	g.waiter.Wait()
 	return
@@ -394,6 +395,7 @@ type forwarderConn struct {
 	owner      *Forwarder
 	readBuffer chan []byte
 	base       *Conn
+	exiter     chan int
 }
 
 func newForwarderConn(owner *Forwarder, base *Conn) (conn *forwarderConn) {
@@ -401,17 +403,18 @@ func newForwarderConn(owner *Forwarder, base *Conn) (conn *forwarderConn) {
 		owner:      owner,
 		readBuffer: make(chan []byte, 3),
 		base:       base,
+		exiter:     make(chan int, 1),
 	}
 	return
 }
 
 func (c *forwarderConn) Read(p []byte) (n int, err error) {
-	data := <-c.readBuffer
-	if len(data) < 1 {
+	select {
+	case data := <-c.readBuffer:
+		n = copy(p, data)
+	case <-c.exiter:
 		err = fmt.Errorf("closed")
-		return
 	}
-	n = copy(p, data)
 	return
 }
 
@@ -433,7 +436,10 @@ func (c *forwarderConn) Write(p []byte) (n int, err error) {
 }
 
 func (c *forwarderConn) Close() (err error) {
-	c.readBuffer <- nil
+	select {
+	case c.exiter <- 1:
+	default:
+	}
 	return
 }
 

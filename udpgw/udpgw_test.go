@@ -138,6 +138,7 @@ func TestGateway(t *testing.T) {
 	//close
 	sender.Close()
 	gw.Close()
+	gw.Read(make([]byte, 1024))
 
 	time.Sleep(100 * time.Millisecond)
 
@@ -464,5 +465,7 @@ func TestForwarder(t *testing.T) {
 		fc.send([]byte("abc"))
 		fc.send([]byte("abc"))
 		fc.Write([]byte{CLIENT_FLAG_IPV6 | CLIENT_FLAG_DNS, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0})
+		fc.Close()
+		fc.Close()
 	}
 }

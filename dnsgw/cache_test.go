@@ -56,7 +56,7 @@ func TestCache(t *testing.T) {
 	cache.Add([]byte{})
 
 	domain, cname, _ := cache.Reflect("127.0.0.1")
-	if domain != "a.example.com." || cname != "example.com." {
+	if domain != "a.example.com" || cname != "example.com" {
 		t.Error("error")
 		return
 	}
@@ -74,7 +74,7 @@ func TestCache(t *testing.T) {
 		return
 	}
 	domain, cname, _ = cache2.Reflect("127.0.0.1")
-	if domain != "a.example.com." || cname != "example.com." {
+	if domain != "a.example.com" || cname != "example.com" {
 		t.Error("error")
 		return
 	}

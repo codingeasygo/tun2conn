@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/codingeasygo/util/xdebug"
 	"github.com/codingeasygo/util/xio"
 	"github.com/codingeasygo/util/xio/frame"
 	"golang.org/x/net/dns/dnsmessage"
@@ -100,8 +101,12 @@ func TestResolver(t *testing.T) {
 }
 
 func TestGateway(t *testing.T) {
-	gw := NewGateway(3)
-	{
+	tester := xdebug.CaseTester{
+		0: 1,
+		4: 1,
+	}
+	if tester.Run("Piper") { //Piper
+		gw := NewGateway(3)
 		ln, err := net.ListenPacket("udp", "127.0.0.1:10453")
 		if err != nil {
 			t.Error(err)
@@ -118,9 +123,10 @@ func TestGateway(t *testing.T) {
 		}
 		fmt.Printf("result is %v\n", string(text))
 		ln.Close()
+		gw.Close()
 	}
-
-	{
+	if tester.Run("ReadWriterCloser") { //ReadWriterCloser
+		gw := NewGateway(3)
 		ln, err := net.ListenPacket("udp", "127.0.0.1:10453")
 		if err != nil {
 			t.Error(err)
@@ -141,9 +147,39 @@ func TestGateway(t *testing.T) {
 
 		conn.addrLast[100] = time.Now().Add(-time.Hour)
 		conn.clearTimeoutLocked()
+		gw.Close()
 	}
-	gw.Close()
-	{ //cover
+	if tester.Run("CopyPiper") { // CopyPiper
+		gw := NewGateway(3)
+		ln, err := net.ListenPacket("udp", "127.0.0.1:10453")
+		if err != nil {
+			t.Error(err)
+			return
+		}
+
+		conn := NewConn(ln)
+		piper := xio.NewCopyPiper(gw, 2048)
+		go func() {
+			err := piper.PipeConn(conn, "tcp://dnspgw")
+			fmt.Printf("--->%v\n", err)
+		}()
+
+		text, err := exec.Command("bash", "-c", "dig baidu.com @127.0.0.1 -p 10453").CombinedOutput()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		fmt.Printf("result is %v\n", string(text))
+		ln.Close()
+
+		conn.addrLast[100] = time.Now().Add(-time.Hour)
+		conn.clearTimeoutLocked()
+		gw.Close()
+	}
+	if tester.Run("cover") { //cover
+		gw := NewGateway(3)
+		gw.Close()
+
 		gw.procQuery(nil)
 		gw.procQuery(&queryTask{request: []byte{1, 2, 3}})
 
@@ -190,7 +226,11 @@ func TestForwarder(t *testing.T) {
 		forwarder := NewForwarder(dialer, 2048)
 		forwarder.Cache = NewCache()
 		forwarder.Policy = func(conid uint16, questions []string) string { return "*" }
-		go forwarder.ServeConn(conn)
+		waiter := make(chan int, 1)
+		go func() {
+			forwarder.ServeConn(conn)
+			waiter <- 1
+		}()
 
 		text, err := exec.Command("bash", "-c", "dig example.com @127.0.0.1 -p 10453").CombinedOutput()
 		if err != nil {
@@ -210,6 +250,10 @@ func TestForwarder(t *testing.T) {
 
 		fc := forwarderConn{}
 		fc.send([]byte("xx"))
-	}
+		fc.Close()
+		fc.Close()
 
+		<-waiter
+	}
+	time.Sleep(100 * time.Millisecond)
 }

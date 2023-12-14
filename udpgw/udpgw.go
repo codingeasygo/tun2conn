@@ -122,6 +122,7 @@ type Gateway struct {
 	connPipe io.ReadWriteCloser
 	connList map[uint16]*gwConn
 	connLock sync.RWMutex
+	exiter   chan int
 }
 
 func NewGateway() (gw *Gateway) {
@@ -131,6 +132,7 @@ func NewGateway() (gw *Gateway) {
 		buffer:   make(chan []byte, 64),
 		connList: map[uint16]*gwConn{},
 		connLock: sync.RWMutex{},
+		exiter:   make(chan int, 1),
 	}
 	return
 }
@@ -175,7 +177,7 @@ func (u *Gateway) Close() (err error) {
 		u.connPipe.Close()
 	}
 	select {
-	case u.buffer <- nil:
+	case u.exiter <- 1:
 	default:
 	}
 	return
@@ -225,12 +227,12 @@ func (u *Gateway) Write(p []byte) (n int, err error) {
 }
 
 func (u *Gateway) Read(p []byte) (n int, err error) {
-	data := <-u.buffer
-	if len(data) < 1 {
+	select {
+	case data := <-u.buffer:
+		n = copy(p, data)
+	case <-u.exiter:
 		err = fmt.Errorf("closed")
-		return
 	}
-	n = copy(p, data)
 	return
 }
 
@@ -478,6 +480,7 @@ type forwarderConn struct {
 	owner      *Forwarder
 	readBuffer chan []byte
 	base       *Conn
+	exiter     chan int
 }
 
 func newForwarderConn(owner *Forwarder, base *Conn) (conn *forwarderConn) {
@@ -485,17 +488,18 @@ func newForwarderConn(owner *Forwarder, base *Conn) (conn *forwarderConn) {
 		owner:      owner,
 		readBuffer: make(chan []byte, 3),
 		base:       base,
+		exiter:     make(chan int, 1),
 	}
 	return
 }
 
 func (c *forwarderConn) Read(p []byte) (n int, err error) {
-	data := <-c.readBuffer
-	if len(data) < 1 {
+	select {
+	case data := <-c.readBuffer:
+		n = copy(p, data)
+	case <-c.exiter:
 		err = fmt.Errorf("closed")
-		return
 	}
-	n = copy(p, data)
 	return
 }
 
@@ -522,7 +526,10 @@ func (c *forwarderConn) Write(p []byte) (n int, err error) {
 }
 
 func (c *forwarderConn) Close() (err error) {
-	c.readBuffer <- nil
+	select {
+	case c.exiter <- 1:
+	default:
+	}
 	return
 }
 
