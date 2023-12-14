@@ -516,12 +516,14 @@ type gwConnTCP struct {
 	wq     *waiter.Queue
 	wait   waiter.Entry
 	notify chan struct{}
+	buffer *bytes.Buffer
 }
 
 func newGwConnTCP(ep tcpip.Endpoint, wq *waiter.Queue) (conn *gwConnTCP) {
 	conn = &gwConnTCP{
-		ep: ep,
-		wq: wq,
+		ep:     ep,
+		wq:     wq,
+		buffer: bytes.NewBuffer(nil),
 	}
 	conn.wait, conn.notify = waiter.NewChannelEntry(waiter.ReadableEvents)
 	wq.EventRegister(&conn.wait)
@@ -529,17 +531,16 @@ func newGwConnTCP(ep tcpip.Endpoint, wq *waiter.Queue) (conn *gwConnTCP) {
 }
 
 func (g *gwConnTCP) Read(p []byte) (int, error) {
-	buf := bytes.NewBuffer(p)
-	buf.Reset()
 	for {
-		if _, err := g.ep.Read(buf, tcpip.ReadOptions{}); err != nil {
-			if _, ok := err.(*tcpip.ErrWouldBlock); ok {
-				<-g.notify
-				continue
-			}
-			return 0, fmt.Errorf("ep read %v", err)
+		_, err := g.ep.Read(g.buffer, tcpip.ReadOptions{})
+		if g.buffer.Len() > 0 {
+			return g.buffer.Read(p)
 		}
-		return buf.Len(), nil
+		if _, ok := err.(*tcpip.ErrWouldBlock); ok {
+			<-g.notify
+			continue
+		}
+		return 0, fmt.Errorf("ep read %v", err)
 	}
 }
 
