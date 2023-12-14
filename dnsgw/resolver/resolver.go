@@ -16,7 +16,7 @@ func main() {
 		panic(err)
 	}
 	buffer := make([]byte, 2048)
-	resolver := &dnsgw.Resolver{}
+	resolver := dnsgw.NewResolver()
 	for {
 		n, from, err := ln.ReadFrom(buffer)
 		if err != nil {

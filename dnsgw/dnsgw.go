@@ -16,7 +16,23 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 )
 
-type Resolver net.Resolver
+type Resolver struct {
+	net.Resolver
+	cacheA     map[string][]net.IP
+	cacheAAAA  map[string][]net.IP
+	cacheCNAME map[string]string
+	cacheLock  sync.RWMutex
+}
+
+func NewResolver() (resolver *Resolver) {
+	resolver = &Resolver{
+		cacheA:     make(map[string][]net.IP),
+		cacheAAAA:  map[string][]net.IP{},
+		cacheCNAME: map[string]string{},
+		cacheLock:  sync.RWMutex{},
+	}
+	return
+}
 
 func (r *Resolver) Query(ctx context.Context, request []byte) (response []byte, err error) {
 	var parser dnsmessage.Parser
@@ -37,7 +53,18 @@ func (r *Resolver) Query(ctx context.Context, request []byte) (response []byte, 
 	for _, question := range questions {
 		switch question.Type {
 		case dnsmessage.TypeA:
-			ip, _ := (*net.Resolver)(r).LookupIP(ctx, "ip4", strings.TrimSuffix(question.Name.String(), "."))
+			domain := strings.TrimSuffix(question.Name.String(), ".")
+			r.cacheLock.RLock()
+			ip := r.cacheA[domain]
+			r.cacheLock.RUnlock()
+			if len(ip) < 1 {
+				ip, _ = r.LookupIP(ctx, "ip4", domain)
+				if len(ip) > 0 {
+					r.cacheLock.Lock()
+					r.cacheA[domain] = ip
+					r.cacheLock.Unlock()
+				}
+			}
 			// fmt.Printf("look A %v=>%v\n", question.Name.String(), err)
 			if len(ip) > 0 {
 				message.Answers = append(message.Answers, dnsmessage.Resource{
@@ -53,7 +80,7 @@ func (r *Resolver) Query(ctx context.Context, request []byte) (response []byte, 
 				found = true
 			}
 		case dnsmessage.TypeNS:
-			ns, _ := (*net.Resolver)(r).LookupNS(ctx, strings.TrimSuffix(question.Name.String(), "."))
+			ns, _ := r.LookupNS(ctx, strings.TrimSuffix(question.Name.String(), "."))
 			// fmt.Printf("look NS %v=>%v\n", question.Name.String(), err)
 			if len(ns) > 0 {
 				message.Answers = append(message.Answers, dnsmessage.Resource{
@@ -69,7 +96,18 @@ func (r *Resolver) Query(ctx context.Context, request []byte) (response []byte, 
 				found = true
 			}
 		case dnsmessage.TypeCNAME:
-			cname, _ := (*net.Resolver)(r).LookupCNAME(ctx, strings.TrimSuffix(question.Name.String(), "."))
+			domain := strings.TrimSuffix(question.Name.String(), ".")
+			r.cacheLock.RLock()
+			cname := r.cacheCNAME[domain]
+			r.cacheLock.RUnlock()
+			if len(cname) < 1 {
+				cname, _ = r.LookupCNAME(ctx, domain)
+				if len(cname) > 0 {
+					r.cacheLock.Lock()
+					r.cacheCNAME[domain] = cname
+					r.cacheLock.Unlock()
+				}
+			}
 			// fmt.Printf("look CNAME %v=>%v\n", question.Name.String(), err)
 			if len(cname) > 0 {
 				message.Answers = append(message.Answers, dnsmessage.Resource{
@@ -104,7 +142,7 @@ func (r *Resolver) Query(ctx context.Context, request []byte) (response []byte, 
 			})
 			found = true
 		case dnsmessage.TypeMX:
-			mx, _ := (*net.Resolver)(r).LookupMX(ctx, strings.TrimSuffix(question.Name.String(), "."))
+			mx, _ := r.LookupMX(ctx, strings.TrimSuffix(question.Name.String(), "."))
 			// fmt.Printf("look MX %v=>%v\n", question.Name.String(), err)
 			if len(mx) > 0 {
 				message.Answers = append(message.Answers, dnsmessage.Resource{
@@ -121,7 +159,7 @@ func (r *Resolver) Query(ctx context.Context, request []byte) (response []byte, 
 				found = true
 			}
 		case dnsmessage.TypeTXT:
-			txt, _ := (*net.Resolver)(r).LookupTXT(ctx, strings.TrimSuffix(question.Name.String(), "."))
+			txt, _ := r.LookupTXT(ctx, strings.TrimSuffix(question.Name.String(), "."))
 			// fmt.Printf("look TXT %v=>%v\n", question.Name.String(), err)
 			if len(txt) > 0 {
 				message.Answers = append(message.Answers, dnsmessage.Resource{
@@ -138,7 +176,18 @@ func (r *Resolver) Query(ctx context.Context, request []byte) (response []byte, 
 			}
 
 		case dnsmessage.TypeAAAA:
-			ip, _ := (*net.Resolver)(r).LookupIP(ctx, "ip6", strings.TrimSuffix(question.Name.String(), "."))
+			domain := strings.TrimSuffix(question.Name.String(), ".")
+			r.cacheLock.RLock()
+			ip := r.cacheAAAA[domain]
+			r.cacheLock.RUnlock()
+			if len(ip) < 1 {
+				ip, _ = r.LookupIP(ctx, "ip6", domain)
+				if len(ip) > 0 {
+					r.cacheLock.Lock()
+					r.cacheAAAA[domain] = ip
+					r.cacheLock.Unlock()
+				}
+			}
 			// fmt.Printf("look AAAA %v=>%v\n", question.Name.String(), err)
 			if len(ip) > 0 {
 				message.Answers = append(message.Answers, dnsmessage.Resource{
@@ -205,7 +254,7 @@ func NewGateway(runner int) (gw *Gateway) {
 		MTU:        2048,
 		Timeout:    5 * time.Second,
 		runner:     runner,
-		resolver:   &Resolver{},
+		resolver:   NewResolver(),
 		readBuffer: make(chan []byte, runner*2),
 		queryTask:  make(chan *queryTask, runner*2),
 		exiter:     make(chan int, runner*2),

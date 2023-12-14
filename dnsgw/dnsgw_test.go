@@ -30,7 +30,7 @@ func TestResolver(t *testing.T) {
 	}
 	port := ln.LocalAddr().(*net.UDPAddr).Port
 
-	resolver := &Resolver{}
+	resolver := NewResolver()
 	go func() {
 		buffer := make([]byte, 2048)
 		for {
