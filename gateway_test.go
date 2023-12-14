@@ -249,13 +249,13 @@ func TestGateway(t *testing.T) {
 
 	{ //policy udp
 		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string, questions []string) (string, net.IP, uint16) {
-			if cname == "example.com." {
+			if cname == "example.com" {
 				return cname, nil, 0
 			}
 			return "", nil, 0
 		}
 		uri, _, _ := gw.policyUDP(1, net.ParseIP("127.0.0.1"), 10, nil)
-		if uri != "example.com." {
+		if uri != "example.com" {
 			t.Error("errror")
 			return
 		}
@@ -263,13 +263,13 @@ func TestGateway(t *testing.T) {
 
 	{ //policy tcp
 		gw.Policy = func(on string, ip net.IP, port uint16, domain, cname string, questions []string) (string, net.IP, uint16) {
-			if cname == "example.com." {
+			if cname == "example.com" {
 				return cname, nil, 0
 			}
 			return "", nil, 0
 		}
 		uri := gw.policyTCP(net.ParseIP("127.0.0.1"), 0)
-		if uri != "example.com." {
+		if uri != "example.com" {
 			t.Error("errror")
 			return
 		}
