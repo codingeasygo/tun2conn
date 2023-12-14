@@ -64,22 +64,27 @@ func (c *Cache) Add(response []byte) {
 			body := answer.Body.(*dnsmessage.CNAMEResource)
 			cname := strings.TrimSuffix(body.CNAME.String(), ".")
 			domain := strings.TrimSuffix(answer.Header.Name.String(), ".")
-			c.CN[cname] = domain
-			log.DebugLog("Cache add CNAME record by %v=>%v", body.CNAME, domain)
+			if c.CN[cname] != domain {
+				c.CN[cname] = domain
+				log.InfoLog("Cache add CNAME record by %v=>%v", body.CNAME, domain)
+			}
 		case dnsmessage.TypeA:
 			body := answer.Body.(*dnsmessage.AResource)
 			key := net.IP(body.A[:]).String()
 			domain := strings.TrimSuffix(answer.Header.Name.String(), ".")
-			c.IP[key] = domain
 			c.Time[key] = now
-			log.DebugLog("Cache add A record by %v=>%v", key, domain)
+			if c.IP[key] != domain {
+				c.IP[key] = domain
+				log.InfoLog("Cache add A record by %v=>%v", key, domain)
+			}
 		case dnsmessage.TypeAAAA:
 			body := answer.Body.(*dnsmessage.AAAAResource)
 			key := net.IP(body.AAAA[:]).String()
 			domain := strings.TrimSuffix(answer.Header.Name.String(), ".")
-			c.IP[key] = domain
-			c.Time[key] = now
-			log.DebugLog("Cache add AAAA record by %v=>%v", key, domain)
+			if c.IP[key] != domain {
+				c.IP[key] = domain
+				log.InfoLog("Cache add AAAA record by %v=>%v", key, domain)
+			}
 		}
 		c.Update = now
 	}
